@@ -24,5 +24,4 @@ jobs:
             graph
             output
             README.md
-          IGNORE_FILE: '.cvsignore'
           PUBLISH: 'false'
