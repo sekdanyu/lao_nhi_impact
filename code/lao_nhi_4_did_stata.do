@@ -1,8 +1,8 @@
 
 * ==============================================================================  
-* Title: Impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR): a quasi-experimental evaluation using longitudinal administrative data
+* Title: The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)
 * Author: Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride
-* Date: July/2025
+* Date: June/2026
 * ==============================================================================  
 
 clear all
