@@ -17,6 +17,6 @@ jobs:
         uses: IQSS/dataverse-uploader@v1.7
         with:
           DATAVERSE_TOKEN: ${{ secrets.MY_API_KEY_EXPIRE_2027_09_03 }}
-          DATAVERSE_SERVER: https://borealisdata.ca
-          DATAVERSE_DATASET_DOI: doi:10.5683/SP4/RYRFZU
+          DATAVERSE_SERVER: 'https://borealisdata.ca'
+          DATAVERSE_DATASET_DOI: 'doi:10.5683/SP4/RYRFZU'
 	  PUBLISH: False
