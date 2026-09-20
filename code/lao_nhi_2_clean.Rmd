@@ -1,0 +1,4875 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Setup
+<br>
+```{r setup}
+
+# Set working directory
+rm(list = ls(all.names = TRUE))
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# Install and load packages
+source("lao_nhi_0_package.r", echo = TRUE)
+
+# Create directories
+if(!dir.exists("./log")) {dir.create("./log")}
+
+# Log
+logpath <- file.path(getwd(), "log", "lao_nhi_2_clean.log")
+logrecord <- log_open(logpath, autolog = TRUE, show_notes = FALSE)
+log_code()
+
+```
+<br>
+
+# Load data
+<br>
+```{r load, warning=FALSE}
+
+# Load outcome data
+file_names <- c(
+  "data_op", "data_ip", "data_opip", "data_ipday",
+  "data_mch", "data_epi", "data_hpv", "data_growth")
+
+# Loop to read Excel files
+for (fn in file_names) {
+  assign(fn, read_excel(paste0("./data export/01_", fn, ".xlsx"), 
+                        guess_max = 1000000))
+}
+
+# Vector of data frame names
+df_names <- c(
+  "data_ipday", "data_mch", "data_epi", "data_hpv", "data_growth")
+
+# Add empty "age_g" column
+for (name in df_names) {
+  assign(name, within(get(name), age_g <- NA), envir = .GlobalEnv)
+}
+
+# Pivot to long data structure 
+df_list <- list(
+  data_op, data_ip, data_opip, data_ipday,
+  data_mch, data_epi, data_hpv, data_growth)
+
+pivot_long <- function(df) {
+  df %>%
+    pivot_longer(
+      cols = !c("age_g", "indicator", "province", "district", 
+                "facility", "facilityunit"),
+      names_to = "period",
+      values_to = "count")
+}
+
+# Loop and save
+df_long <- lapply(df_list, pivot_long)
+df_names <- c(
+  "data_op", "data_ip", "data_opip", "data_ipday",
+  "data_mch", "data_epi", "data_hpv", "data_growth")
+names(df_long) <- paste0(df_names, "_l")
+list2env(df_long, envir = .GlobalEnv)
+
+# Add 'month' column
+df_l_list <- list(
+  data_op_l, data_ip_l, data_opip_l, data_ipday_l, 
+  data_mch_l, data_epi_l, data_hpv_l, data_growth_l)
+
+add_month_column <- function(df) {
+  df %>% 
+    mutate(month = as.Date(as.integer(period), origin = "1899-12-30"))
+}
+
+# Loop and save
+df_month <- lapply(df_l_list, add_month_column)
+names(df_month) <- paste0(df_names, "_l")
+list2env(df_month, envir = .GlobalEnv)
+
+unique(data_op$indicator)
+unique(data_ip$indicator)
+unique(data_opip$indicator)
+unique(data_ipday$indicator)
+unique(data_mch$indicator)
+
+```
+<br>
+
+# Outpatient and Inpatient data
+<br>
+```{r process opip, warning=FALSE}
+
+# Outpatient is a sum of 43 indicators (identical for over 5, under 5)
+# Communicable diseases, according to DHIS2
+
+opdcom <- c(
+  "OPD Diarrhea with blood",
+  "OPD Diarrhea, no blood, no severe dehydration",
+  "OPD Diarrhea severe dehydration",
+  "OPD Common cold",
+  "OPD Pneumo-bronchitis",
+  "OPD Severe pneumo-bronchitis",
+  "OPD Probable malaria, no test",
+  "OPD P.falciparum tested positive confirmed",
+  "OPD non P.falciparum tested positive",
+  "OPD Malaria tested negative",
+  "OPD Dengue fever",
+  "OPD Measles",
+  "OPD Genital discharge syndrome",
+  "OPD Genital ulcer syndrome",
+  "OPD Helminthes parasites",
+  "OPD All other infections")
+length(opdcom)
+
+# Other diseases/pathology
+opdnotcom <- c(
+  "OPD Diabetes",
+  "OPD Other endocrine pathology",
+  "OPD Malnutrition",
+  "OPD Anemia",
+  "OPD Other blood disease",
+  "OPD Cancer",
+  "OPD Epilepsy",
+  "OPD Nervous system-non-psych",
+  "OPD Psychiatric",
+  "OPD Tonsillitis, pharyngitits",
+  "OPD Otitis",
+  "OPD Ear, nose, throat",
+  "OPD Ophthalmology",
+  "OPD Hypertension",
+  "OPD Other circulatory and heart",
+  "OPD Asthma",
+  "OPD All other respiratory",
+  "OPD Digestive system",
+  "OPD Skin disorders",
+  "OPD Musculo-skeletal system",
+  "OPD Gyneco-Obstetrics",
+  "OPD Urology",
+  "OPD Road traffic injury",
+  "OPD Trauma, all other",
+  "OPD Dental",
+  "OPD Small surgery / dressing",
+  "OPD All other OPD cases")
+length(opdnotcom)
+
+data_op_l <- data_op_l %>%
+  mutate(
+    disease = case_when(
+      indicator %in% opdcom ~ "com",
+      indicator %in% opdnotcom ~ "notcom",
+      TRUE ~ NA))
+
+# Inpatient is a sum of 43 indicators
+# Over 5: 42 indicators
+# Under 5: 41 indicators
+
+ipdcom <- c(
+  "IPD Diarrhea with blood",
+  "IPD Diarrhea, no blood, no severe dehydration",
+  "IPD Diarrhea severe dehydration",
+  "IPD Common cold",
+  "IPD Pneumo-bronchitis",
+  "IPD Severe pneumo-bronchitis",
+  "IPD Probable malaria, no test",
+  "IPD P.falciparum tested positive confirmed",
+  "IPD Non P.falciparum tested positive",
+  "IPD Malaria tested negative",
+  "IPD Dengue fever",
+  "IPD Measles",
+  "IPD Genital discharge syndrome",
+  "IPD Genital ulcer syndrome",
+  "IPD Helminthes parasites",
+  "IPD All other infections")
+length(ipdcom)
+
+# Other diseases/pathology
+ipdnotcom <- c(
+  "IPD Diabetes",
+  "IPD Other endocrine pathology",
+  "IPD Malnutrition",
+  "IPD Anemia",
+  "IPD Other blood disease",
+  "IPD Cancer",
+  "IPD Epilepsy",
+  "IPD Nervous system-non-psych.",                        
+  "IPD Psychiatric",
+  "IPD Tonsillitis, pharyngitits",
+  "IPD Otitis",
+  "IPD Ear, nose, throat",
+  "IPD Ophthalmology",
+  "IPD Hypertension",
+  "IPD Other circulatory and heart",
+  "IPD Asthma",
+  "IPD All other respiratory",
+  "IPD Digestive system",
+  "IPD Skin disorders",
+  "IPD Musculo-skeletal system",
+  "IPD Gyneco-Obstetrics",
+  "IPD Urology",
+  "IPD Road traffic injury",
+  "IPD Trauma, all other",
+  "IPD All other causes and diseases",
+  "IPD: Obstetrics") # only over 5
+
+length(ipdnotcom)
+
+data_ip_l <- data_ip_l %>%
+  mutate(
+    disease = case_when(
+      indicator %in% ipdcom ~ "com",
+      indicator %in% ipdnotcom ~ "notcom",
+      TRUE ~ NA))
+
+# Indicators to be changed
+changeop <- c("OPD Tonsillitis, pharyngitits","IPD Tonsillitis, pharyngitits")
+
+data_op_l <- data_op_l %>%
+  mutate(disease = if_else(indicator %in% changeop, "com", disease))
+
+data_ip_l <- data_ip_l %>%
+  mutate(disease = if_else(indicator %in% changeop, "com", disease))
+
+# Identify indicators to be dropped
+data_op_drop <- data_op_l %>%
+  filter(is.na(disease)) %>%
+  dplyr::select(indicator) %>%
+  distinct()
+  # 13 indicators not included in OPD visits + 
+  # 3 indicators not included in o5, u5 breakdown
+
+data_ip_drop <- data_ip_l %>%
+  filter(is.na(disease)) %>%
+  dplyr::select(indicator) %>%
+  distinct()
+  # 17 indicators not included in IPD visits (o5, u5)
+
+# Extract specific OPD small surgery/dressing cases
+data_op_smsrg <- data_op_l %>%
+  filter(indicator == "OPD Small surgery / dressing")
+
+data_op_l <- data_op_l %>% filter(!is.na(disease))
+data_ip_l <- data_ip_l %>% filter(!is.na(disease))
+
+data_opip_ob <- data_opip_l %>%
+  filter(indicator %in% c(
+    "OPD Gyneco-Obstetrics",
+    "OPD: Obstetrics",
+    "IPD Gyneco-Obstetrics",
+    "IPD: Obstetrics"))
+
+unique(data_opip_ob$indicator)
+
+# ------------------------------------------------------------------------------
+# Outpatient (OPD) Data
+# ------------------------------------------------------------------------------
+
+# long to wide, to sum columns with NA;
+# if all columns are NA: return NA, otherwise: sum of columns
+
+data_op_w <- data_op_l %>%
+  dplyr::select(-c("period")) %>%
+  pivot_wider(
+    id_cols = c("age_g", "province", "district", "facility", 
+                "facilityunit", "month", "disease"),
+    names_from = "indicator",
+    values_from = "count")
+
+# Compute total count sum per row
+data_op_w$countsum <- apply(data_op_w[, 8:ncol(data_op_w)], 1, function(x) {
+  ifelse(all(is.na(x)), NA, sum(x, na.rm = TRUE))
+})
+
+# Select relevant columns
+data_op_dis <- data_op_w[, c(1:7, ncol(data_op_w))] %>%
+  mutate(age_g = ifelse(age_g == "Over 5", "opo5", "opu5")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = c("age_g", "disease"),
+    values_from = "countsum")
+
+# Summarize data
+data_op_sum <- data_op_dis
+data_op_sum$opu5 <- apply(data_op_sum[, 6:7], 1, function(x) {
+  ifelse(all(is.na(x)), NA, sum(x, na.rm = TRUE))
+})
+data_op_sum$opo5 <- apply(data_op_sum[, 8:9], 1, function(x) {
+  ifelse(all(is.na(x)), NA, sum(x, na.rm = TRUE))
+})
+
+# "OPD: Outpatient visits Over 5"                         opo5
+# "OPD: Outpatient visits Under 5"                        opu5
+
+# ------------------------------------------------------------------------------
+# Inpatient (IPD) Data
+# ------------------------------------------------------------------------------
+
+data_ip_w <- data_ip_l %>%
+  dplyr::select(-c("period")) %>%
+  pivot_wider(
+    id_cols = c("age_g", "province", "district", "facility", 
+                "facilityunit", "month", "disease"),
+    names_from = "indicator",
+    values_from = "count")
+
+# Compute total count sum per row
+data_ip_w$countsum <- apply(data_ip_w[, 8:ncol(data_ip_w)], 1, function(x) {
+  ifelse(all(is.na(x)), NA, sum(x, na.rm = TRUE))
+})
+
+# Select relevant columns
+data_ip_dis <- data_ip_w[, c(1:7, ncol(data_ip_w))] %>%
+  mutate(age_g = ifelse(age_g == "Over 5", "ipo5", "ipu5")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = c("age_g", "disease"),
+    values_from = "countsum")
+
+# Summarize data
+data_ip_sum <- data_ip_dis
+data_ip_sum$ipu5 <- apply(data_ip_sum[, 6:7], 1, function(x) {
+  ifelse(all(is.na(x)), NA, sum(x, na.rm = TRUE))
+})
+data_ip_sum$ipo5 <- apply(data_ip_sum[, 8:9], 1, function(x) {
+  ifelse(all(is.na(x)), NA, sum(x, na.rm = TRUE))
+})
+
+# "IPD: Inpatient visits" Over 5                          ipo5
+# "IPD: Inpatient visits" Under 5                         ipu5
+
+# ------------------------------------------------------------------------------
+# Inpatient Day Data
+# ------------------------------------------------------------------------------
+
+coln <- c("province", "district", "facility", "facilityunit", "count", "month")
+data_ipday_l <- data_ipday_l[, coln]
+colnames(data_ipday_l)[5] <- "ipday"
+
+# "IPD Inpatient Days of Care"                            ipday
+
+# ------------------------------------------------------------------------------
+# Small Surgery & Obstetrics Data
+# ------------------------------------------------------------------------------
+
+# Small Surgery
+data_op_smsrg <- data_op_smsrg %>%
+  mutate(
+    indicator = ifelse(indicator == "OPD Small surgery / dressing", 
+                       "smsrg", indicator),
+    age_g = ifelse(age_g == "Over 5", "o5", "u5"))
+
+data_op_smsrg_w <- data_op_smsrg %>%
+  dplyr::select(-c("period")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = c("indicator", "age_g"),
+    values_from = "count") %>%
+  pivot_longer(
+    !c("province", "district", "facility", "facilityunit", "month"),
+    names_to = "indicator",
+    values_to = "count") %>%
+  mutate(indicator = ifelse(indicator == "smsrg_u5", "smsrgu5", "smsrgo5")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = "indicator",
+    values_from = "count")
+  
+# "OPD Small surgery / dressing" Over 5                   smsrgo5
+# "OPD Small surgery / dressing" Under 5                  smsrgu5
+
+# Obstetrics
+data_opip_ob <- data_opip_ob %>%
+  mutate(
+    indicator = case_when(
+      indicator == "OPD Gyneco-Obstetrics" ~ "opob1",
+      indicator == "OPD: Obstetrics" ~ "opob2",
+      indicator == "IPD Gyneco-Obstetrics" ~ "ipob1",
+      indicator == "IPD: Obstetrics" ~ "ipob2",
+      TRUE ~ indicator),
+    age_g = ifelse(age_g == "Over 5", "o5", "u5")) %>%
+  filter(age_g != "u5")
+  
+data_opip_ob_w <- data_opip_ob %>%
+  dplyr::select(-c("period")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = c("indicator", "age_g"),
+    values_from = "count") %>%
+  pivot_longer(
+    !c("province", "district", "facility", "facilityunit", "month"),
+    names_to = "indicator",
+    values_to = "count") %>%
+  mutate(
+    indicator = case_when(
+      indicator == "ipob2_o5" ~ "ipob2o5",
+      indicator == "opob2_o5" ~ "opob2o5",
+      indicator == "opob1_o5" ~ "opob1o5",
+      TRUE ~ "ipob1o5")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = "indicator",
+    values_from = "count")
+
+# "OPD Gyneco-Obstetrics" Over 5                            opob1o5
+# "OPD: Obstetrics" Over 5                                  opob2o5
+# "IPD Gyneco-Obstetrics" Over 5                            ipob1o5
+# "IPD: Obstetrics" Over 5                                  ipob2o5
+
+# ------------------------------------------------------------------------------
+# Merge Data
+# ------------------------------------------------------------------------------
+
+data.ser <- left_join(data_op_sum, data_ip_sum,
+                      by = c("province", "district", "facility", 
+                             "facilityunit", "month"))
+data_unmatch <- anti_join(data_ip_sum, data_op_sum,
+                          by = c("province", "district", "facility",
+                                 "facilityunit", "month"))
+
+# Unmatched records are irrelevant cases
+unique(data_unmatch$facility)
+data.ser <- left_join(data.ser, data_ipday_l,
+                      by = c("province", "district", "facility", 
+                             "facilityunit", "month"))
+data_unmatch <- anti_join(data_ipday_l, data.ser,
+                          by = c("province", "district", "facility", 
+                                 "facilityunit", "month"))
+
+unique(data_unmatch$facility)
+data.ser <- left_join(data.ser, data_op_smsrg_w,
+                      by = c("province", "district", "facility", 
+                             "facilityunit", "month"))
+data_unmatch <- anti_join(data_op_smsrg_w, data.ser,
+                          by = c("province", "district", "facility", 
+                                 "facilityunit", "month"))
+
+unique(data_unmatch$facility)
+data.ser <- left_join(data.ser, data_opip_ob_w,
+                      by = c("province", "district", "facility",
+                             "facilityunit", "month"))
+
+# "OPD: Outpatient visits" Over 5                           opo5
+# "OPD: Outpatient visits" Under 5                          opu5
+# "IPD: Inpatient visits" Over 5                            ipo5
+# "IPD: Inpatient visits" Under 5                           ipu5
+# "IPD Inpatient Days of Care"                              ipday
+
+# _com: communicable disease category
+# _notcom: non-communicable disease category
+
+# "OPD Small surgery / dressing" Over 5                     smsrgo5
+# "OPD Small surgery / dressing" Under 5                    smsrgu5
+# "OPD Gyneco-Obstetrics" Over 5                            opob1o5
+# "OPD: Obstetrics" Over 5                                  opob2o5
+# "IPD Gyneco-Obstetrics" Over 5                            ipob1o5
+# "IPD: Obstetrics" Over 5                                  ipob2o5
+
+colnames(data.ser)
+
+```
+<br>
+
+# MCH data
+<br>
+```{r mch, warning=FALSE}
+
+data_mch_l <- data_mch_l %>%
+  arrange(indicator, province, district, facility, facilityunit, month)
+unique(data_mch_l$indicator)
+
+#  [1] "ANC 1st visit (MCH) (Old data)"                               drop
+#  [2] "ANC 1st visit by Health facility/Outreach"                    anc1
+#  [3] "ANC 1st visits"                                               drop
+#  [4] "ANC 1st visits among pregnant women at least 19 years.."      anc1.old1
+#  [5] "ANC 1st visits among pregnant women under 19 years.."         anc1.old2
+#  [6] "ANC 4th Visit by Health facility/Outreach"                    anc4
+#  [7] "ANC 4th visit (Old data) (MCH)"                               anc4.old
+#  [8] "ANC all others visit"                                         drop (up to early 2015)
+# [13] "MCH: Total number of ANC visit"                               drop (from 06/2023)
+
+# "ANC 1st visit (MCH) (Old data)" mostly overlap with "ANC 1st visit by Health..."
+# "ANC 1st visits" empty
+# "ANC all others visit"; available up to around early/2015
+# "MCH: Total number of ANC visit"; available from 06/2023
+
+# ANC data merged by the following order:
+# "ANC 1st visit by Health facility/Outreach"
+# + "ANC 1st visits among pregnant women at least 19 years.."
+# + "ANC 1st visits among pregnant women under 19 years.."
+# + "ANC 4th Visit by Health facility/Outreach"
+# + "ANC 4th visit (Old data) (MCH)"
+# Add up ANC 2nd & 3rd visit later (linearly interpolate)
+
+# Drop specific indicators
+data_mch_l <- data_mch_l %>%
+  filter(
+    !indicator %in% c(
+      "ANC 1st visit (MCH) (Old data)", 
+      "ANC 1st visits", 
+      "ANC all others visit", 
+      "MCH: Total number of ANC visit"))
+
+#  [9] "Caesarean delivery"                                           drop
+# [10] "MCH: Delivery at HFs"                                         del
+# 'Delivery at HF': natural delivery + caesarean section
+
+data_mch_l <- data_mch_l %>% 
+  filter(indicator != "Caesarean delivery")
+
+# [11] "MCH: PNC at HFs"                                              pnc1
+# [12] "MCH: Total PNC"                                               drop (pnc1 + pnc2)
+# [14] "MCH: Total number of PNC visit"                               drop (from 09/2022)
+# [15] "PNC 3-42 days"                                                drop (pnc2)
+# [16] "PNC within 2 days"                                            drop (pnc1)
+# [17] "Total PNC"                                                    pnc.old3
+# [18] "Total PNC (person time)"                                      pnc.old1
+# [19] "Women receive PNC within 1-7 days from birth"                 pnc.old2a
+# [20] "Women receive PNC within 8-42 days from birth"                pnc.old2b
+
+# "Total PNC" from 01/2014 to around mid-2015
+# "Total PNC (person time)" from 10/2014 to around end-2015
+# "MCH: Total PNC" = "PNC within 2 days" + "PNC 3-42 days"
+
+# "MCH: PNC at HFs"
+# - Fully reported from 10/2015 - at least end 2023 
+# - Identical or smaller than 
+#   - "MCH: Total PNC" (up 09/2022)
+#   - "MCH: Total number of PNC visit" (from June-Oct/2022)
+# "PNC within 2 days" + "PNC 3-42 days" discontinue 09/2022
+
+# PNC data merged by the following order:
+# Quality of data can be ensured largely from 10/2015
+# "MCH: PNC at HFs"; available mostly from 10/2015
+# + add up "Total PNC (person time)"; available mostly 10/2014 - 12/2015
+# + add up "Women receive PNC within 1-7 days from birth"; 10/2014 - 12/2015
+# + add up "Women receive PNC within 8-42 days from birth"; 10/2014 - 12/2015
+# + add up "Total PNC"; available from 2014 or earlier
+
+data_mch_l <- data_mch_l %>%
+  filter(
+    !indicator %in% c(
+      "MCH: Total PNC",
+      "MCH: Total number of PNC visit",
+      "PNC 3-42 days",
+      "PNC within 2 days"))
+unique(data_mch_l$indicator)
+
+data_mch_l <- data_mch_l %>%
+  mutate(
+    indicator = case_when(
+      indicator == "ANC 1st visit by Health facility/Outreach" ~ "anc1",
+      indicator == "ANC 1st visits among pregnant women at least 19 years by Health facility/Outreach" ~ "anc1.old1",
+      indicator == "ANC 1st visits among pregnant women under 19 years by Health facility/Outreach" ~ "anc1.old2",
+      indicator == "ANC 4th Visit by Health facility/Outreach" ~ "anc4",
+      indicator == "ANC 4th visit (Old data) (MCH)" ~ "anc4.old",
+      indicator == "MCH: Delivery at HFs" ~ "del",
+      indicator == "MCH: PNC at HFs" ~ "pnc1",
+      indicator == "Total PNC (person time)" ~ "pnc.old1",
+      indicator == "Women receive PNC within 1-7 days from birth" ~ "pnc.old2a",
+      indicator == "Women receive PNC within 8-42 days from birth" ~ "pnc.old2b",
+      indicator == "Total PNC" ~ "pnc.old3",
+      TRUE ~ indicator))
+unique(data_mch_l$indicator)
+
+# Pivot data to wide format
+data_mch_w <- data_mch_l %>%
+  dplyr::select(-c("period","age_g")) %>%
+  pivot_wider(
+    id_cols = c("province", "district", "facility", "facilityunit", "month"),
+    names_from = "indicator",
+    values_from = "count")
+colnames(data_mch_w)
+
+# ------------------------------------------------------------------------------
+# ANC1 Data
+# ------------------------------------------------------------------------------
+
+# Merge old and new ANC1 data (NA processed)
+# "anc1 at least 19, under 19": anc1.old1, anc1.old2
+
+# Combine "anc1 at least 19, under 19" into a single column
+data_mch_w$anc.oldx <- rowSums(data_mch_w[, c("anc1.old1", "anc1.old2")])
+
+# Create new variable
+data_mch_w <- data_mch_w %>%
+  mutate(
+    anc1.old = case_when(
+      !is.na(anc.oldx) ~ anc.oldx,
+      is.na(anc.oldx) & !is.na(anc1.old1) ~ anc1.old1,
+      is.na(anc.oldx) & !is.na(anc1.old2) ~ anc1.old2,
+      TRUE ~ NA),
+    anc1.new = ifelse(is.na(anc1), anc1.old, anc1))
+data_mch_w$anc.oldx <- NULL
+
+# ------------------------------------------------------------------------------
+# ANC4 Data
+# ------------------------------------------------------------------------------
+
+data_mch_w <- data_mch_w %>%
+  mutate(anc4.new = ifelse(!is.na(anc4.old), anc4.old, anc4)) %>%
+  dplyr::select(-anc1, -anc1.old1, -anc1.old2, -anc4)
+
+# ------------------------------------------------------------------------------
+# PNC Data
+# ------------------------------------------------------------------------------
+
+# Merge old and new PNC data (NA processed)
+# "MCH: PNC at HFs": pnc1
+# "Total PNC (person time)": pnc.old1
+# "Sum of Women received 1-7, 8-42": pnc.old2a, pnc.old2b
+# "Total PNC": pnc.old3
+
+# Assign 'pnc.new' by prioritizing 'pnc1' over 'pnc.old1'
+data_mch_w <- data_mch_w %>%
+  mutate(pnc.new = ifelse(is.na(pnc1), pnc.old1, pnc1))
+
+# Combine 'pnc.old2a' and 'pnc.old2b' into a single column
+data_mch_w$pnc.old2x <- rowSums(data_mch_w[, c("pnc.old2a", "pnc.old2b")])
+
+# Assign 'pnc.old2' based on availability
+data_mch_w <- data_mch_w %>%
+  mutate(
+    pnc.old2 = case_when(
+      !is.na(pnc.old2x) ~ pnc.old2x,
+      is.na(pnc.old2x) & !is.na(pnc.old2a) ~ pnc.old2a,
+      is.na(pnc.old2x) & !is.na(pnc.old2b) ~ pnc.old2b,
+      TRUE ~ NA))
+data_mch_w$pnc.old2x <- NULL
+
+# Create new PNC variables
+data_mch_w <- data_mch_w %>%
+  mutate(
+    pnc.new2 = ifelse(is.na(pnc.new), pnc.old2, pnc.new),
+    pnc.new3 = ifelse(is.na(pnc.new2), pnc.old3, pnc.new2)) %>%
+  dplyr::select(-pnc.old2a, -pnc.old2b, -pnc1, -pnc.new, -pnc.new2)
+colnames(data_mch_w)
+
+# Rename Columns
+data_mch_w <- data_mch_w %>%
+  rename(
+    anc1 = anc1.new,
+    anc4 = anc4.new,
+    pnc = pnc.new3)
+colnames(data_mch_w)
+
+# ------------------------------------------------------------------------------
+# Merge Data
+# ------------------------------------------------------------------------------
+
+data.ser <- left_join(
+  data.ser, data_mch_w,
+  by = c("province", "district", "facility", "facilityunit", "month"))
+
+data_unmatch <- anti_join(
+  data_mch_w, data.ser,
+  by = c("province", "district", "facility", "facilityunit", "month"))
+
+# Save Data
+colnames(data.ser)
+
+```
+<br>
+
+# EPI and growth data
+<br>
+```{r epi growth, warning=FALSE}
+
+# ------------------------------------------------------------------------------
+# EPI + HPV Data
+# ------------------------------------------------------------------------------
+
+data_epi_l <- rbind(data_epi_l, data_hpv_l)
+ind_name <- unique(data_epi_l$indicator)
+ind_name
+
+data_epi_l <- data_epi_l %>% # remove "/"
+  mutate(
+    indicator = case_when(
+      indicator == "Class 5/10 year out school HPV 2" ~ 
+        "Class 5-10 year out school HPV 2",
+      indicator == "Monthly Class 5/10 year out school HPV 1" ~ 
+        "Monthly Class 5-10 year out school HPV 1",
+      TRUE ~ indicator))
+
+data_epi_l <- data_epi_l %>% # add sequence
+  group_by(indicator, facility) %>%
+  mutate(seq = row_number()) %>%
+  ungroup()
+
+# Keep Monthly FIC under1 year data
+data_epi_fic <- data_epi_l %>%
+  ungroup() %>%
+  filter(indicator == "Monthly FIC under1 year") %>%
+  dplyr::select(-c(age_g, period, seq, indicator, facilityunit)) %>%
+  rename(c(fic1 = "count"))
+colnames(data_epi_fic)
+
+data.ser <- left_join(
+  data.ser,
+  data_epi_fic,
+  by = c("province", "district", "facility", "month"))
+
+data_unmatch <- anti_join(
+  data_epi_fic,
+  data.ser,
+  by = c("province", "district", "facility", "month"))
+unique(data_unmatch$facility)
+colnames(data.ser)
+
+# ------------------------------------------------------------------------------
+# Growth Data
+# ------------------------------------------------------------------------------
+
+data_growth_l <- data_growth_l %>%
+  group_by(indicator, facility) %>%
+  mutate(seq = row_number())
+
+ind_name <- unique(data_growth_l$indicator)
+ind_name
+
+# Drop data
+data_growth_l_k <- data_growth_l %>%
+  filter(
+    !indicator %in% c(
+      "Children 6-59 months received Vitamin A",
+      "Children received Vitamin A 1",
+      "Children received Vitamin A 2",
+      "Female 12-14 years received IFA for 1 pill a week New user",
+      "Female 12-14 years received IFA for 1 pill a week Old user",
+      "Female 12-44 years received IFA pills",
+      "Helmithi 1st Children Deworming tablets 1st round",
+      "Helmithi 2nd Children Deworming tablets 2nd round",
+      "MCH: Number of 1st screening in the month",
+      "MCH: Number of children aged 6-11 months received Vit A 100.000 IU",
+      "MCH: Number of children aged 12-59 months received Mebendazole (Helmithic) 1st time",
+      "MCH: Number of children aged 12-59 months received Mebendazole (Helmithic) 2nd time",
+      "MCH: Number of children aged 12-59 months received Vit A 200.000 IU 1st time",
+      "MCH: Number of children aged 12-59 months received Vit A 200.000 IU 2nd time",
+      "MCH: Number of children received other stimulate for delayed development",
+      "MCH: Number of children received stimulated for delayed development",
+      "MCH: Total number of boys received well child screening",
+      "MCH: Total number of child screening visit",
+      "MCH: Total number of girls received well child screening",
+      "Total IFA for 1 pill a week distributed and wastage to 12-14 year female",
+      "Vitamin A given at PNC")) %>%
+  dplyr::select(-age_g)
+
+unique(data_growth_l_k$indicator)
+
+# Merge data
+# data.ser <- left_join(data.ser,data_growth_l_k,
+#                       by=c("province","district","facility",
+#                            "facilityunit","month"))
+# data_unmatch <- anti_join(data_growth_l_k,data.ser,
+#                       by=c("province","district","facility",
+#                            "facilityunit","month"))
+# unique(data_unmatch$facility)
+
+# Save Data
+write_xlsx(data.ser, "./data export/02_clean_1_ser.xlsx")
+
+```
+
+# Process data
+<br>
+```{r process, warning=FALSE}
+
+# ------------------------------------------------------------------------------
+# Load and prepare data
+# ------------------------------------------------------------------------------
+
+# data.ser <- read_excel("./data export/02_clean_1_ser.xlsx", guess_max = 100000)
+
+# Load dataset
+data.raw <- data.ser
+
+# Add year and quarter, arrange
+data.raw <- data.raw %>%
+  mutate(
+    year = year(month),
+    quarter = lubridate::quarter(month, with_year = TRUE)) %>%
+  arrange(province, district, facility, month)
+
+# ------------------------------------------------------------------------------
+# Drop irrelevant facilities
+# ------------------------------------------------------------------------------
+
+unique(data.raw$district)     # NA: central hospitals, provincial hospital
+unique(data.raw$facilityunit) # NA: central hospitals, provincial hospital
+
+# Define facility types to drop
+dropfacilityunit <- c("Central Hospital", "Army Hospital",
+                      "Police Hospital", "Public Private Mix Site",
+                      "Urban Village", "Drop In Centre (Chas)",
+                      "Drop In Centre (CHAS)", "Private hospital",
+                      "Pharmacy", "District Service Center",
+                      "Malaria Station", "Children's Hospital",
+                      "Clinic level 1", "Pharmacy level 3",
+                      "Pharmacy level 1", "Pharmacy level 2", 
+                      "Clinic level 3", "Health Service",
+                      "Clinic level 2", "District Warehouse", 
+                      "Clinic level3", "MMT")
+
+# Remove irrelevant facility units
+data.raw <- data.raw %>% 
+  filter(!facilityunit %in% dropfacilityunit)
+unique(data.raw$facilityunit)
+
+# ------------------------------------------------------------------------------
+# Keep only provincial, district (community) hospitals, and health centers
+# ------------------------------------------------------------------------------
+
+# Identify rows with missing 'facilityunit'
+data.rawNA <- data.raw %>% 
+  filter(is.na(facilityunit))
+unique(data.rawNA$facility)
+
+# Filter out health centers from missing facilityunit records
+data.rawNA2 <- data.rawNA %>% 
+  filter(str_detect(facility, "HC"))
+unique(data.rawNA2$facility)
+
+# Remove rows with missing facilityunit except for health centers
+data.raw <- data.raw %>%
+  filter(!is.na(facilityunit)) %>%  # remove facilityunit NA
+  rbind(data.rawNA2) %>%            # add up facilityunit NA but HC
+  arrange(province, district, facility, month)
+
+# ------------------------------------------------------------------------------
+# Fix incorrect HC labels
+# ------------------------------------------------------------------------------
+
+unique(data.raw$facility)
+data.raw <- data.raw %>% 
+  mutate(
+    facility = str_replace_all(facility, "‚®ÇHC", "HC"),
+    facility = str_replace_all(facility, "‚®Ç HC", "HC"),
+    facility = str_replace_all(facility, "‚úñÔ∏éHC", "HC"))
+unique(data.raw$facility)
+
+# ------------------------------------------------------------------------------
+# Adjust PH codes and facility names
+# ------------------------------------------------------------------------------
+
+unique(data.raw$district)
+data.raw <- data.raw %>%
+  mutate(
+    district = ifelse(str_detect(district, " PH "), 
+                      str_replace_all(district, " PH", "00 PH"), district),
+    facility = ifelse(str_detect(facility, " PH "), 
+                      substr(facility,4,30), facility))
+unique(data.raw$district)
+
+# ------------------------------------------------------------------------------
+# Add unique facility name
+# ------------------------------------------------------------------------------
+
+data.raw$facilityname <- 0
+data.raw <- data.raw %>% 
+  mutate(
+    facilityname = paste((substr(district, 1, 4)),
+                         facility, sep = " "))
+unique(data.raw$facilityname)
+
+# ------------------------------------------------------------------------------
+# Identify and handle duplicate facilities
+# ------------------------------------------------------------------------------
+
+data.raw %>% summarise(count = n_distinct(facilityname))
+month.n <- data.raw %>% 
+  filter(facilityname == "0202 DH Mai") %>% 
+  n_distinct
+
+data.raw %>% 
+  group_by(province) %>% 
+  summarise(count = n_distinct(district))
+
+data.raw %>% 
+  group_by(province, district) %>% 
+  summarize(n = n()) %>% 
+  print(n = Inf)
+
+data.raw %>% 
+  group_by(province, district, facilityname) %>% 
+  summarize(n = n()) %>% 
+  print(n = Inf) %>% 
+  filter(n != month.n)
+# 0109 Pakngum Nafay -> duplicates
+
+# Replace 0109 Pakngum Nafay (Health Center + CLOSED combined)
+HC.Nafay <- filter(data.raw, facilityname == "0109 HC Nafay") # duplicate
+
+dates_to_keep <- c("2016-05-01", "2015-05-01", "2014-07-01", 
+                   "2014-01-01", "2013-11-01", "2013-10-01")
+
+HC.Nafay2 <- HC.Nafay %>%
+  filter(facilityunit == "Health Center" &
+         as.character(month) %in% dates_to_keep)
+
+HC.Nafay3 <- HC.Nafay %>%
+  filter(facilityunit == "CLOSED" &
+         !(as.character(month) %in% dates_to_keep))
+
+HC.Nafay.new <- bind_rows(HC.Nafay2, HC.Nafay3) %>%
+  mutate(facilityunit = "CLOSED")
+
+data.raw <- data.raw %>%
+  filter(facilityname != "0109 HC Nafay") %>%   # drop 0109 Pakngum Nafay
+  bind_rows(HC.Nafay.new) %>%                   # add new Nafay
+  arrange(province, district, facility, month)
+
+# ------------------------------------------------------------------------------
+# Create complete data frame
+# ------------------------------------------------------------------------------
+
+# Add empty month (implicitly missing) 
+# -> this issue appear to be fixed in a new dataset
+
+DH.MAI <- filter(data.raw, facilityname == "0202 DH Mai") # facility with full month
+month.n <- n_distinct(DH.MAI$month)                       # total # of months
+month.f <- DH.MAI[, c("month", "year", "quarter")]        # complete frame
+
+fac.n <- n_distinct(data.raw$facilityname)              # total # of facilities
+fac.f <- data.raw[, c("province", "district", "facility", "facilityname")]
+fac.f <- unique(fac.f)                                  # list of facilities
+
+frame.fac <- as.data.frame(fac.f[rep(seq_len(nrow(fac.f)), each = month.n), ])
+frame.ts <- as.data.frame(lapply(month.f, rep, fac.n))
+frame <- cbind(frame.fac, frame.ts)                      # clean data frame
+
+# Filter data Q3/2014-Q3/2019
+data.raw <- filter(data.raw, quarter >= 2014.3 & quarter <= 2019.3)
+
+# ------------------------------------------------------------------------------
+# Add unique identifiers and facility levels
+# ------------------------------------------------------------------------------
+
+frame <- frame %>%
+  mutate(
+    pnum = as.integer(substr(province, 1, 2)),
+    dnum = substr(district, 1, 4),
+    facseq = as.numeric(ave(province, district, month, FUN = seq_along)),
+    xindex = as.numeric(ave(district, facilityname, FUN = seq_along)),
+    faccode = paste(substr(district, 1, 4), facseq, sep = "_"),
+    faccodeindex = paste(faccode, sprintf("%02d", xindex), sep = "_"),
+    facid = as.numeric(factor(facilityname))) %>%
+  arrange(facilityname, month)
+
+n_distinct(frame$faccode)
+unique(frame$xindex)
+
+# Add facility level
+frame$faclevel <- case_when(
+  substr(frame$facility, 1, 2) == "PH" ~ "PH",
+  substr(frame$facility, 1, 2) == "DH" ~ "DH",
+  substr(frame$facility, 1, 2) == "HC" ~ "HC",
+  TRUE ~ "XX")
+unique(frame$faclevel)
+
+# Summary
+fac.summary <- table(frame$faccode,frame$faclevel)
+colSums(fac.summary)/month.n
+
+#  DH   HC  PH 
+# 135 1115  17
+
+# ------------------------------------------------------------------------------
+# Final data merging and cleanup
+# ------------------------------------------------------------------------------
+
+data.raw <- data.raw %>%
+  dplyr::select(-province, -district, -facility, -year, -quarter) # -facilityunit, 
+unique(data.raw$facilityunit)
+
+data.ful <- left_join(frame, data.raw, by=c("facilityname", "month"))
+
+# Change district name
+data.ful <- data.ful %>%
+  mutate(
+    district = case_when(
+      # old name -> new name
+      district == "0103 Xaisettha (Vientiane Capital)" ~ "0103 Xaisettha",
+      district == "0610 Viangkham (Louangphabang)" ~ "0610 Viangkham",
+      district == "0612 Phonthong (Louangphabang)" ~ "0612 Phonthong",
+      district == "1009 Viangkham (Vientiane)" ~ "1009 Viangkham",
+      district == "1606 Phonthong (Champasak)" ~ "1606 Phonthong",
+      district == "1701 Xaisettha (Attapu)" ~ "1701 Xaisettha",
+      TRUE ~ district))
+
+nrow(data.ful) - nrow(data.raw)
+# raw data has 3913 omitted rows (implicitly missing)
+
+# Save Data
+data.ful_backup <- data.ful
+
+```
+
+# Level and trend data
+<br>
+```{r level, warning=FALSE}
+
+# ------------------------------------------------------------------------------
+# Add NHI inception point and level (month)
+# ------------------------------------------------------------------------------
+
+# Provinces and the month of inception
+# -----------------------------------
+# VTC No intervention (never-treated control group);
+# PSL 2017/02/01; LNT 2016/08/01; ODX 2017/02/01; BKO 2017/10/01; LPG 2017/10/01;
+# HPN 2017/01/01; XYB 2017/10/01; XKG 2017/01/01; VTP 2017/10/01; BKX 2017/01/01;
+# KMN 2017/10/01; SVK 2017/09/01; SRV 2016/12/01; SEK 2017/06/01; CPS 2017/09/01;
+# ATP 2016/07/01; XSB 2016/08/01
+
+# Intervention Groups:
+# -----------------------------------
+# 1st treated (Q3/2016): 17 ATP, 03 LNT, 18 XSB
+# 2nd treated (Q4/2016): 14 SRV
+# 3rd treated (Q1/2017): 11 BKX, 07 HPN, 09 XKG, 04 ODX, 02 PSL
+# 4th treated (Q3/2017): 13 SVK, 16 CPS
+# 5th treated (Q4/2017): 05 BKO, 12 KMN, 06 LPG, 08 XYB, 10 VTP
+
+# Range: Q1/2015-Q3/2019
+data.ful <- filter(data.ful, quarter >= 2015.1 & quarter <= 2019.3)
+
+# Create data frame for NHI inception points
+nhiicp <- data.frame(matrix(NA, 18, 2))
+colnames(nhiicp) <- c("province", "month")
+nhiicp$province <- unique(data.ful$province)
+
+# Assign NHI inception dates
+#nhiicp <- add_row(nhiicp, province = "00 National", month = NA, .before=1)
+nhiicp$month <- as.Date(c("2200-01-01",
+                          "2017-02-01","2016-08-01","2017-02-01","2017-10-01",
+                          "2017-10-01","2017-01-01","2017-10-01","2017-01-01",
+                          "2017-10-01","2017-01-01","2017-10-01","2017-09-01",
+                          "2016-12-01","2017-06-01","2017-09-01","2016-07-01",
+                          "2016-08-01"))
+class(nhiicp$month)
+nhiicp$monthicp <- nhiicp$month
+nhiicp$quarter <- lubridate::quarter(nhiicp$month, with_year = TRUE)
+rownames(data.ful) <- seq(length = nrow(data.ful))
+
+prov.n <- unique(data.ful$province)
+monthicp <- nhiicp$month
+data.ful$month <- as.Date(data.ful$month)
+
+# Add inception point (inception month 1, otherwise 0)
+data.ful$inceptm <- 0
+NHI_inceptm <- function(a, b) {
+  data.ful <<- mutate(data.ful, inceptm = ifelse(month == a & province == b, 1, inceptm))}
+for (i in 1:18) {
+       NHI_inceptm(monthicp[[i]], prov.n[[i]])}
+
+# Add inception point (inception quarter 1, otherwise 0)
+data.ful$inceptq <- 0
+NHI_inceptq <- function(a, b) {
+  data.ful <<- mutate(data.ful,
+    inceptq = ifelse(quarter == lubridate::quarter(a, with_year = TRUE) & 
+                       province == b, 1, inceptq))}
+for (i in 1:18) {
+       NHI_inceptq(monthicp[[i]], prov.n[[i]])}
+
+# Add NHI level (pre-NHI 0, post-NHI 1)
+data.ful$levelm <- 0 # month
+NHI_levelm <- function(a, b) {
+  data.ful <<- mutate(data.ful, levelm = ifelse(month >= a & province == b, 1, levelm))}
+for (i in 1:18) {
+        NHI_levelm(monthicp[[i]], prov.n[[i]])}
+
+data.ful$levelq <- 0 # quarter
+NHI_levelq <- function(a, b) {
+  data.ful <<- mutate(data.ful,
+    levelq = ifelse(quarter >= lubridate::quarter(a, with_year = TRUE) & 
+                      province == b, 1, levelq))}
+for (i in 1:18) {
+        NHI_levelq(monthicp[[i]], prov.n[[i]])}
+
+# Add NHI trend (pre-NHI 0, post-NHI 1,2,3...)
+data.ful <- data.ful %>%
+  mutate(
+    xindex = as.numeric(ave(district, facilityname, FUN = seq_along)),
+    faccodeindex = paste(faccode, xindex, sep = "_"),
+    trendm = 0,
+    trendm = as.numeric(ave(faccode, faccode, levelm, FUN = seq_along)),
+    xindex2 = as.numeric(trendm),
+    trendm = as.numeric(ifelse(levelm == 0, 0, trendm)))
+
+# Validate unique month count and xindex
+n_distinct(data.ful$month)
+unique(data.ful$xindex)
+# -> The number of month should match the number of xindex
+
+# Save Data
+write_xlsx(data.ful, "./data export/02_clean_1_ful.xlsx")
+
+```
+<br>
+
+# Identify outliers (Round 1b: from Q4/2015 to Q1/2019)
+<br>
+```{r outlier, warning=FALSE}
+
+# Trimming the dataset may improve outlier detection accuracy. Data from Jan 2015 to Sep 2015 shows inconsistencies and poor ANC/PNC data quality. Data from Apr 2019 to Dec 2019 fluctuates. The period from Oct 2015 to Mar 2019 is more stable, with fewer outliers and minimal need for correction or imputation.
+
+# ts() commend has an option to set the frequency of the data (12 for monthly, 4 for quarterly, 1 for yearly).
+
+data.ful <- read_excel("./data export/02_clean_1_ful.xlsx", guess_max = 100000)
+
+data.out1b <- data.ful %>%
+  filter(quarter >= 2015.4 & quarter <= 2019.1) %>%
+  mutate(
+    xindex = as.numeric(with(., ave(district, facilityname, FUN = seq_along))),
+    faccodeindex = paste(faccode, xindex, sep = "_"),
+    xindex2 = NA,
+    xindex2 = as.numeric(with(., ave(faccode, faccode, levelm, FUN = seq_along))))
+
+# Data quality check (zero, non-zero, NA)
+data.avil <- data.out1b %>%
+  dplyr::select(opo5_notcom:fic1) %>% # select all outcome variables
+  gather(var, value) %>%
+  group_by(var) %>%
+  summarise(zero = sum(value == 0, na.rm = TRUE),
+            nonzero = sum(value > 0, na.rm = TRUE),
+            missing = sum(is.na(value))) %>%
+  print(n = Inf)
+
+data.avil <- data.avil %>%
+  mutate(total = rowSums(dplyr::select(., c(zero, nonzero, missing)), na.rm = TRUE),
+         pctzero = zero / total,
+         pctnonzero = nonzero / total,
+         pctmissing = missing / total) %>% 
+  print(n = Inf)
+
+
+# Identify and replace outliers in a time series using the 'tsoutliers' function from the 'forecast' package, not the 'tsoutliers' package. This process utilizes supsmu for non-seasonal data and periodic STL decomposition for seasonal data. Outliers are identified as those falling outside the range of Q1 - 3xIQR to Q3 + 3xIQR ('far out' by Tukey). For details, see:
+# https://robjhyndman.com/hyndsight/tsoutliers/
+# https://pkg.robjhyndman.com/forecast/reference/tsoutliers.html
+
+# In this trimmed dataset, the data frequency is set to 12, and the function will automatically check for seasonality. For example, facilities that implemented NHI early have only 9 months of pre-NHI data, so seasonality cannot be detected (need 12 months of data for at least 2 periods; 2 years). In this case, supsmu is applied. For facilities with longer data periods, the function should detect seasonality and apply periodic STL decomposition.
+
+# Loop to identify outliers and suggest replacement values for outcome variables. The loop creates tsoutlier index which to be linked with xindex2. Facilities must have at least 3 observations, required by tsoutliers().
+
+outlier.list = list()
+var.names <- c(
+  "opo5", "opu5", "ipo5", "ipu5", "ipday",
+  "smsrgo5", "smsrgu5",
+  "anc1", "anc4", "pnc", "del",
+  "opob1o5", "ipob1o5",
+  "fic1")
+level.names <- c(0, 1)
+
+for (k in 1:length(level.names)) {
+  data.otl <- data.out1b %>% filter(levelm == level.names[k])
+  outlier.list[[k]] = list()
+        
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  data.otl1 <- data.otl %>% group_by(faccode)
+  data.otl2 <- filter(data.otl1, sum(!is.na(!!variable)) >= 3)
+  fac.ls <- unique(data.otl2$faccode)
+  outlier.list[[k]][[j]] = list()
+        
+for (i in 1:length(fac.ls)) {
+  data.otl3 <- filter(data.otl2, faccode == fac.ls[i])
+  data.otl4 <- dplyr::select(ungroup(data.otl3), xindex, !!variable)
+  data.otl5 <- ts(unlist(data.otl4[, var.names[j]]), frequency = 12)
+# Set frequency to 1 to make it non-seasonal time series data. 
+# data.otl5 <- unlist(data.otl4[,var.names[j]]) # not time-series, freq=1
+  data.otl6 <- data.otl5 %>% tsoutliers() %>% as.data.frame()
+  data.otl7 <- ifelse(is.na(data.otl6[1, ]), data.otl6[1, ] == NA, data.otl6)
+  data.otl8 <- as.data.frame(data.otl7)
+  
+  data.otl8$faccode <- fac.ls[i]
+  data.otl8$outcome <- var.names[j]
+  data.otl8$level <- level.names[k]
+        
+  colnames(data.otl8) <- c("xindex", "replace", "faccode", "outcome", "levelm")
+  outlier.list[[k]][[j]][[i]] <- data.otl8
+}}}
+
+outlier.pre <- do.call(
+  rbind, c(unlist(outlier.list[[1]], recursive = FALSE), make.row.names = FALSE))
+outlier.post <- do.call(
+  rbind, c(unlist(outlier.list[[2]], recursive = FALSE), make.row.names = FALSE))
+outlier.sp <- spread(
+  rbind(outlier.pre, outlier.post), key = outcome, value = replace)
+
+colnames(outlier.sp) <- c(
+  "xindex2", "faccode", "levelm",
+  paste0(colnames(outlier.sp)[4:ncol(outlier.sp)], ".out1b"))
+
+data.out1b <- data.out1b %>%
+  left_join(outlier.sp, by = c("faccode", "xindex2", "levelm")) %>%
+  arrange(province, district, faccode, xindex)
+
+# Save Data
+write_xlsx(data.out1b, "./data export/02_clean_2_out1b.xlsx")
+
+```
+<br>
+
+# Outlier plot (Round 1b: Oct/2015 - Mar/2019)
+<br>
+```{r outplot r1b, warning=FALSE}
+
+# data.out1b <- read_excel("./data export/02_clean_2_out1b.xlsx", guess_max = 100000)
+
+plot.out1b <- data.out1b
+
+# Create folders
+fc <- c("./clean")
+f2o <- c("/2.outlier")
+if(!dir.exists(paste0(fc))) {dir.create(paste0(fc))}
+if(!dir.exists(paste0(fc, f2o))) {dir.create(paste0(fc, f2o))}
+if(!dir.exists(paste0(fc, f2o, "/r1b"))) {dir.create(paste0(fc, f2o, "/r1b"))}
+
+# Index
+plot.out1b$icpindex <- plot.out1b$xindex*plot.out1b$inceptm
+icpidxm <- plot.out1b %>%
+  dplyr::select(province, icpindex) %>%
+  distinct() %>%
+  filter(icpindex > 0)
+icpidx <- c(0,icpidxm$icpindex)
+
+str(plot.out1b$month)
+mchidx <- plot.out1b %>% 
+  filter(as.character(month) == "2017-10-01") %>%
+  pull(xindex) %>% unique()
+m102015idx <- plot.out1b %>% 
+  filter(as.character(month) == "2015-10-01") %>%
+  pull(xindex) %>% unique()
+m122015idx <- plot.out1b %>% 
+  filter(as.character(month) == "2015-12-01") %>%
+  pull(xindex) %>% unique()
+m042019idx <- plot.out1b %>%
+  filter(as.character(month) == "2019-04-01") %>%
+  pull(xindex) %>% unique()
+
+# NHI inception month - black dash line
+# MCH integration month - blue dash line
+# Outside study period - grey shaded area
+# Outlier replacement value - red dots
+
+# Generate outlier plot by province (all variables)
+var.names <- c(
+    "opo5", "opu5", "ipo5", "ipu5", "ipday",
+    "smsrgo5", "smsrgu5",
+    "anc1", "anc4", "pnc", "del",
+    "opob1o5", "ipob1o5",
+    "fic1")
+out.names <- paste0(var.names, ".out1b")
+
+hgt <- c(
+    10, 11, 10, 15, 10, 20, 20, 20, 15, 15, 
+    10, 22, 32, 20, 8, 20, 10, 6)
+
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  outnames <- rlang::sym(out.names[j])
+  
+  for (i in 1:18) {
+    plot <- ggplot(subset(plot.out1b, pnum == i), 
+                   aes(x = xindex, y = !!variable)) +
+      geom_rect(aes(xmin = 0,xmax = m122015idx, ymin = 0, ymax = Inf),
+                fill = alpha("#FFCC33", 0.9)) +
+      geom_point(color = "grey") + 
+      ylim(0, NA) +
+      geom_point(aes(y = !!outnames), col = "red") + # outlier value
+      facet_wrap(~facilityname, ncol = 5, scales = "free") +
+      geom_vline(aes(xintercept = icpidx[i]), linetype = "dashed",
+                 col = "black", alpha = 0.6) +
+      geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+                 col = "blue", alpha = 0.6) +
+      theme_light() +
+      theme(
+        panel.border = element_rect(colour = "grey90"),  
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = -0.125),
+        strip.text = element_text(color = 'black', size = 7, face = "bold"),
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_rect(fill = "grey90")) +
+        guides(fill = guide_legend(nrow = 1))
+
+    png(paste("./clean/2.outlier/r1b/", var.names[j], "_p", i, ".png", sep=""), 
+        units = "in", width = 6.5, height = hgt[i], res = 400)
+
+    print(plot)
+    dev.off()
+}}
+
+# Hospital only
+if(!dir.exists(paste0(fc, f2o, "/r1b/hos")))
+  {dir.create(paste0(fc, f2o, "/r1b/hos"))}
+
+hgt <- c(30)
+
+for (j in 1:length(var.names)) {
+  outnames <- rlang::sym(out.names[j])
+  variable <- rlang::sym(var.names[j])
+  
+  plot.out1b.hos <- plot.out1b %>%
+    filter(faclevel %in% c("PH", "DH"))
+  
+  plot <- ggplot(plot.out1b.hos, aes(x = xindex, y = !!variable)) +
+    # geom_line(color = "grey") +
+    geom_rect(aes(xmin = 0, xmax = m122015idx, ymin = 0, ymax = Inf),
+              fill = alpha("#FFCC33", 0.9)) +
+    ylim(0,NA) +
+    geom_point(aes(y = !!outnames), col = "red") +
+    facet_wrap(~facilityname, ncol = 5, scales = "free") +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),  
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      strip.text = element_text(color = "black", size = 7, face = "bold"),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+      strip.background = element_rect(fill = "grey90")) +
+    guides(fill = guide_legend(nrow = 1))
+    
+    png(paste("./clean/2.outlier/r1b/hos/", var.names[j], ".png", sep = ""), 
+        units = "in", width = 6.5, height = hgt, res = 400)
+    print(plot)
+    dev.off()
+}
+
+```
+<br>
+
+# Clean up minor data issues (fix data entry errors, drop, NA, merge)
+<br>
+```{r correct, warning=FALSE}
+
+data.out1b <- read_excel("./data export/02_clean_2_out1b.xlsx", guess_max = 100000)
+
+data.svk <- data.out1b
+
+beforefac <- colSums(table(data.svk$faccode, data.svk$faclevel))/
+  length(unique(data.svk$xindex))
+beforefac
+
+# out1b: 42 months
+#  DH   HC   PH 
+# 135 1115   17 
+
+# ------------------------------------------------------------------------------
+# Merge SVK
+# ------------------------------------------------------------------------------
+
+# 1301 DH Kaysone: functioning as a sub-PH unit (confirmed by SVK PHIB office)
+# Merge with Savannakhet PH
+
+SVK_PH <- filter(data.svk, facilityname == "1300 PH Savannakhet")
+SVK_DH_KSN <- filter(data.svk, facilityname == "1301 DH Kaysone")
+SVK_PH.new <- rbind(SVK_PH, SVK_DH_KSN)
+
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "opo5_com", "opo5_notcom", "ipo5_com", "ipo5_notcom",
+               "opu5_com", "opu5_notcom", "ipu5_com", "ipu5_notcom",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+
+SVK_var <- SVK_PH.new %>% 
+  group_by(month) %>%
+  summarise_at(var.names, sum, na.rm = TRUE)
+
+SVK_key <- SVK_PH %>% dplyr::select(-all_of(var.names))
+SVK_PH.new <- left_join(SVK_key, SVK_var, by = c("month"))
+
+svk.list2 <- c("1300 PH Savannakhet", "1301 DH Kaysone")
+data.svk1 <- filter(data.svk, !(facilityname %in% svk.list2))
+
+data.svk <- rbind(data.svk1, SVK_PH.new) %>%
+    arrange(facilityname, month)
+
+data.svk1 <- NULL
+
+# In total, dropped 42 rows
+# Merged Kaysone DH with SVK PH
+nrow(data.out1b) - nrow(data.svk)
+
+afterfac <- colSums(table(data.svk$faccode, data.svk$faclevel)) / 
+            length(unique(data.svk$xindex)) 
+
+beforefac-afterfac
+
+data.crt <- data.svk
+
+# ------------------------------------------------------------------------------
+# Merge 1314 DH Xaiphouthong + 1314 HC Xaiphouthong (DH Catchment Area)
+# ------------------------------------------------------------------------------
+
+# Drop 1314 DH Xaiphouthong 2015-10-01 to 2016-02-01
+# Replace with 1314 HC Xaiphouthong (DH Catchment Area) data
+
+xpt_dh <- data.crt %>%
+  filter(
+    facilityname == "1314 DH Xaiphouthong",
+    as.character(month) >= "2015-10-01",
+    as.character(month) <= "2016-02-01"
+  )
+
+xpt_hc <- data.crt %>%
+  filter(
+    facilityname == "1314 HC Xaiphouthong (DH Catchment Area)",
+    as.character(month) >= "2015-10-01",
+    as.character(month) <= "2016-02-01"
+  )
+
+start <- match("opu5_notcom", names(data.crt))
+end   <- match("fic1", names(data.crt))
+cols  <- names(data.crt)[min(start, end):max(start, end)]
+
+xpt_dh_replaced <- xpt_dh %>%
+  left_join(
+    xpt_hc %>% dplyr::select(month, all_of(cols)),
+    by = "month",
+    suffix = c("", "_rep")
+  ) %>%
+  mutate(across(all_of(cols), ~ coalesce(
+    get(paste0(cur_column(), "_rep")), .
+  ))) %>%
+  dplyr::select(-ends_with("_rep"))
+
+# Drop and rbind
+data.crt <- data.crt %>%
+  filter(
+    !(facilityname == "1314 DH Xaiphouthong" &
+        as.character(month) >= "2015-10-01" &
+        as.character(month) <= "2016-02-01"),
+    facilityname != "1314 HC Xaiphouthong (DH Catchment Area)"
+  )
+
+data.crt <- data.crt %>%
+  bind_rows(xpt_dh_replaced) %>%
+  arrange(facilityname, month)
+
+# ------------------------------------------------------------------------------
+# Facility with NA
+# ------------------------------------------------------------------------------
+
+# Identify and drop facility base on aged >=5 utilization only
+# Clean up OPD data first -> required for generating facnum variable
+
+# Facility missing half of outpatient aged>=5 data
+dtahalf <- length(unique(data.crt$xindex)) / 2
+
+opo5.na <- data.crt %>% 
+    group_by(faccode) %>% 
+    filter(sum(!is.na(opo5)) < dtahalf)
+
+# Replace values with NA; excluded from analysis
+drop.fac.list <- c(
+  "0102 HC Kaoliao",  # closed, no data except fic1
+  "0103 HC Nakhouay", # closed, no data
+  "0109 HC Dongkalum",  # closed, inconsistent data
+  "0109 HC Pakngum", # closed, no op/ip data, only del and fic
+  "1315 HC Phalanxai (Khetxangseng)" # no data
+)
+
+data.crt <- data.crt %>%
+    mutate(across(opu5_notcom:fic1, 
+                  ~ ifelse(facilityname %in% drop.fac.list, NA, .x)))
+
+# "1210 DH Khounkham", # unbalanced panel; DH newly built in 2017
+#data.crt <- filter(data.crt,!(facilityname %in% drop.fac.list))
+
+# Partially replace (zeros) to NA
+data.crt <- data.crt %>%
+  mutate(across(opu5_notcom:fic1, ~ ifelse(
+    facilityname == "0103 HC Nonvay" & year>=2016, NA, .x)))
+
+data.crt <- data.crt %>%
+  mutate(across(opu5_notcom:fic1, ~ ifelse(
+    facilityname == "1308 HC Hintek" & year<=2017, NA, .x)))
+
+data.crt <- data.crt %>%
+  mutate(across(opu5_notcom:fic1, ~ ifelse(
+    facilityname == "1705 HC Phouhom" & year>=2018, NA, .x)))
+
+data.crt <- data.crt %>%
+  mutate(across(ipu5_notcom:fic1, ~ ifelse(
+    facilityname == "1801 HC Nammo" & year>=2015, NA, .x)))
+
+# Facility missing half of inpatient aged>=5 data
+dtahalf <- length(unique(data.crt$xindex)) / 2
+
+ipo5.na <- data.crt %>% 
+    group_by(faccode) %>%
+    filter(sum(!is.na(ipo5)) < dtahalf)
+
+# Replace values with NA
+drop.fac.list <- c(
+  "0101 DH Chanthabouli",               # zeros
+  "0102 HC Chansavang (Sikhottabong)",  # zeros
+  #  "0102 HC Kaoliao",                   # already replaced
+  "0102 HC Nongniao",                   # zeros
+  "0103 HC Doung",                      # zeros
+  #  "0103 HC Nakhouay",                  # already replaced
+  "0103 HC Nongniang",                  # zeros
+  "0103 HC Nonvay",                     # zeros
+  "0105 HC Banboua",                    # 2 outliers
+  "0106 HC Dongbang",                   # 2 outliers
+  "0206 HC Xeochay",                    # zeros
+  "1001 HC Nongkhon",                   # zeros
+  "1003 HC Keokou",                     # zeros
+  #  "0109 HC Dongkalum",                 # already replaced
+  #  "0109 HC Pakngum",                   # already replaced
+  "1308 HC Donnyai",                    # zeros
+  "1308 HC Hintek",                     # zeros
+  "1308 HC Naphongtiou",                # zeros
+  "1310 HC Kabao",                      # zeros
+  "1311 HC Naonua",                     # zeros
+  #  "1315 HC Phalanxai (Khetxangseng)"   # already replaced
+  "1705 HC Phouhom",                    # zero + inconsistent
+  "1801 HC Nammo",                      # zero + inconsistent
+  "1801 HC Namnyon (Anouvong)"          # zero
+)
+
+data.crt <- data.crt %>%
+    mutate(across(ipu5_notcom:ipday, 
+                  ~ ifelse(facilityname %in% drop.fac.list, NA, .x)))
+
+write_xlsx(data.crt, "./data export/02_clean_3_crt.xlsx")
+
+```
+<br>
+
+# Facility number
+<br>
+```{r facility, warning=FALSE}
+
+# data.crt <- read_excel("./data export/02_clean_3_crt.xlsx", guess_max = 100000)
+
+colnames(data.crt)
+data.fan <- data.crt
+
+# Facility number is generated based on outpatient services availability 
+# except 01 Vientiane Capital
+
+# Based on outpatient services availability
+data.fan <- data.fan %>%
+  mutate(
+    OPx = rowSums(dplyr::select(., opo5, opu5), na.rm = FALSE),
+    OP = ifelse(!is.na(OPx), OPx,
+                ifelse(is.na(OPx) & !is.na(opo5), opo5,
+                       ifelse(is.na(OPx) & !is.na(opu5), opu5, NA)))) %>%
+  mutate(fac_case = ifelse(OP>0, 1, OP)) %>%
+  dplyr::select(-OPx)
+
+# Starting month
+fac_m <- data.fan %>% 
+  dplyr::select(province:faclevel, OP, fac_case) %>%
+  group_by(province, faccode, fac_case) %>% 
+  filter(month == min(month)) %>% 
+  slice(1) %>%
+  ungroup() %>%
+  drop_na(fac_case) %>%
+  dplyr::select(province, faccode, month, fac_case) %>% 
+  filter(fac_case == 1) %>%
+  mutate(fac_m = month) %>%
+  dplyr::select(-fac_case, -month)
+
+data.fan <- left_join(data.fan, fac_m, by=c("province","faccode"))
+
+str(data.fan$month)
+str(data.fan$fac_m)
+str(data.fan$faccode)
+
+fac_m_l <- as.list(as.character(fac_m$fac_m))
+fac_code_l <- as.list(fac_m$faccode)
+
+data.fan <- data.fan %>%
+  mutate(facnum = 0) %>%
+  group_by(faccode) %>% 
+  mutate(facnum = ifelse(month >= fac_m, 1, facnum)) %>%
+  ungroup() %>%
+  dplyr::select(-fac_case, -fac_m) %>%
+  mutate(facnum2 = as.factor(facnum))
+
+unique(data.fan$facnum)
+str(data.fan$facnum2)
+
+# Facility closed
+fac.end <- data.fan %>% 
+  dplyr::select(province:faclevel, OP, facnum, facilityunit) %>%
+  filter(facilityunit == "CLOSED") %>%
+  mutate(fac_case = ifelse(OP > 0, 1, 0)) %>%
+  group_by(province, faccode, fac_case) %>%
+  filter(fac_case == 1) %>%
+  filter(month == max(month)) %>% 
+  filter(as.character(month) != "2019-03-01") %>%  # drop 2 facilities with full data
+  filter(facilityname != "0109 HC Nafay") %>%      # drop HC Nafay (not applicable)
+  ungroup()
+
+fac_m <- fac.end %>%
+  mutate(xend = xindex+1) %>%
+  dplyr::select(province, faccode, xend) %>%
+  
+  # validation below shows 1705_4 HC Phouhom has an error
+  # xend should be 23 (22+1), instead of 37 (36+1)
+  mutate(xend = if_else(faccode == "1705_4", 23, xend))
+
+fac.closed.name <- unique(fac_m$faccode)
+
+fac_closed <- data.fan %>%
+  filter(faccode %in% fac.closed.name) %>%
+  left_join(fac_m, by = c("province", "faccode")) %>%
+  group_by(faccode) %>%
+  mutate(facnum = ifelse(xindex >= xend, 0, 1)) %>%
+  ungroup() %>%
+  dplyr::select(-xend)
+
+fac_closed_validate <- fac_closed %>%
+  dplyr::select(province, district, faccode, facilityname, month, OP, facnum)
+
+data.fan <- data.fan %>%
+  filter(!faccode %in% fac.closed.name) %>%
+  bind_rows(fac_closed) %>%
+  mutate(facnum2 = as.character(facnum))
+
+str(data.fan$facnum2)
+
+# Manual fix - Not applied
+# HC Naxon (Pakngum), stopped outpatient from 2017 Q3, but ANC/PNC still provided
+# data.fan <- mutate(data.fan,
+#              facnum=ifelse(facility=="HC Naxon (Pakngum)" & 
+#                                     month >= "2017-06-01",0,facnum))
+
+write_xlsx(data.fan,"./data export/02_clean_3_fan.xlsx")
+
+```
+<br>
+
+# Facility plot
+<br>
+```{r facilityplot, message=FALSE, warning=FALSE}
+
+# Create folders
+if(!dir.exists("./clean")) {dir.create("./clean")}
+if(!dir.exists("./clean/3.fac")) {dir.create("./clean/3.fac")}
+
+# Generate facility number plot by province
+hgt <- c(10, 11, 10, 15, 10, 20, 20, 20, 15, 15, 
+         10, 22, 32, 20, 8, 20, 10, 6)
+
+for (i in 1:18) {
+  plot <- ggplot(subset(data.fan, pnum == i), aes(x = xindex, y = OP)) +
+    geom_point(color = "grey") +
+    ylim(0, NA) +
+    geom_point(aes(y = facnum, group = facnum2, color = facnum2)) +
+    facet_wrap(~facilityname, ncol = 5, scales = "free") +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),  
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      strip.text = element_text(color = "black", size = 7, face = "bold"),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+      strip.background = element_rect(fill = "grey90")) +
+    guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/3.fac/fac_p", i, ".png", sep = ""), 
+      units = "in", width = 6.5, height = hgt[i], res = 400)
+  print(plot)
+  dev.off()
+}
+
+data.fan <- data.fan %>%
+  dplyr::select(-OP, -facnum2)
+
+```
+<br>
+
+# Replace outliers (1st round)
+<br>
+```{r replace, warning=FALSE}
+
+# data.fan <- read_excel("./data export/02_clean_3_fan.xlsx", guess_max = 100000)
+
+data.rpc <- data.fan %>% 
+  arrange(facilityname, month)
+colSums(table(data.rpc$faccode, data.rpc$faclevel))/
+  length(unique(data.rpc$xindex))
+
+#  DH   HC   PH 
+# 134 1114   17
+
+# ------------------------------------------------------------------------------
+# Fix known outliers
+# ------------------------------------------------------------------------------
+
+# Function to manually replace outliers using an index
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# facname= facility name
+# a= column name with outlier value
+# b= column name with replacement value
+# id= xindex
+
+outlier_rpc_m <- function(facname, a, b, id) {
+  #        a <- enquo(a)
+  #        b <- enquo(b)
+  outdf <- data.rpc %>%
+    filter(facilityname == facname) %>%
+    mutate({{a}} := replace({{a}}, xindex == id, {{b}}[xindex == id]))
+  
+  outrpc <- filter(data.rpc, facilityname != facname)
+  data.rpc <- rbind(outdf,outrpc)
+  data.rpc <<- data.rpc %>% 
+    arrange(facilityname,month)
+}
+
+# Function to replace value with NA
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# facname= facility name
+# a= column name with outlier value
+# col = index column (e.g., year)
+# ind = index value (e.g., 2016)
+
+outlier_rpc_na <- function(facname, a, col, id) {
+  nadf <- data.rpc %>% 
+    filter(facilityname == facname) %>%
+    mutate({{a}} := replace({{a}}, {{col}} == id, NA))
+  
+  narpc <- filter(data.rpc, facilityname != facname)
+  nadata <- rbind(nadf, narpc)
+  data.rpc <<- nadata %>% 
+    arrange(facilityname, month)
+}
+
+data.rpc$opo5c <- data.rpc$opo5
+data.rpc$opu5c <- data.rpc$opu5
+data.rpc$ipo5c <- data.rpc$ipo5
+data.rpc$ipu5c <- data.rpc$ipu5
+
+data.rpc$anc1c <- data.rpc$anc1
+data.rpc$anc4c <- data.rpc$anc4
+
+# Replaced (corrected; Age reversed)
+re <- data.rpc %>% 
+  filter(as.character(month) == "2016-03-01" & 
+           facilityname == "1011 DH Mun") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% as.numeric()
+
+# Replace
+outlier_rpc_m("1011 DH Mun", opo5, opu5c, re)
+outlier_rpc_m("1011 DH Mun", opu5, opo5c, re)
+outlier_rpc_m("1011 DH Mun", ipo5, ipu5c, re)
+outlier_rpc_m("1011 DH Mun", ipu5, ipo5c, re)
+
+# Remove replacement value
+outlier_rpc_na("1011 DH Mun", opo5.out1b, xindex, re)
+outlier_rpc_na("1011 DH Mun", opu5.out1b, xindex, re)
+outlier_rpc_na("1011 DH Mun", ipo5.out1b, xindex, re)
+outlier_rpc_na("1011 DH Mun", ipu5.out1b, xindex, re)
+
+re <- data.rpc %>%
+  filter(as.character(month) == "2016-08-01" & 
+           facilityname == "1209 DH Xaibouathong") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% as.numeric()
+
+# Replace
+outlier_rpc_m("1209 DH Xaibouathong", opo5, opu5c, re)
+outlier_rpc_m("1209 DH Xaibouathong", opu5, opo5c, re)
+outlier_rpc_m("1209 DH Xaibouathong", ipo5, ipu5c, re)
+outlier_rpc_m("1209 DH Xaibouathong", ipu5, ipo5c, re)
+
+# Remove replacement value
+outlier_rpc_na("1209 DH Xaibouathong", opo5.out1b, xindex, re)
+outlier_rpc_na("1209 DH Xaibouathong", opu5.out1b, xindex, re)
+outlier_rpc_na("1209 DH Xaibouathong", ipo5.out1b, xindex, re)
+outlier_rpc_na("1209 DH Xaibouathong", ipu5.out1b, xindex, re)
+
+# Replaced (corrected; Age reversed); all HCs in 1210 Khounkham
+re1 <- data.rpc %>% 
+  filter(as.character(month) == "2016-05-01" & 
+           district == "1210 Khounkham") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% 
+  as.numeric()
+re2 <- re1 + 1
+
+facilities <- c("1210 HC Kongloh", "1210 HC Nakang", "1210 HC Phaxang",
+                "1210 HC Phoumakneng", "1210 HC Vangthakhong")
+
+for (fac in facilities) {
+  
+  # Replace
+  outlier_rpc_m(fac, opo5, opu5c, re1)
+  outlier_rpc_m(fac, opu5, opo5c, re1)
+  outlier_rpc_m(fac, ipo5, ipu5c, re1)
+  outlier_rpc_m(fac, ipu5, ipo5c, re1)
+  outlier_rpc_m(fac, opo5, opu5c, re2)
+  outlier_rpc_m(fac, opu5, opo5c, re2)
+  outlier_rpc_m(fac, ipo5, ipu5c, re2)
+  outlier_rpc_m(fac, ipu5, ipo5c, re2)
+
+  # Remove replacement value
+  outlier_rpc_na(fac, opo5.out1b, xindex, re1) 
+  outlier_rpc_na(fac, opu5.out1b, xindex, re1) 
+  outlier_rpc_na(fac, ipo5.out1b, xindex, re1) 
+  outlier_rpc_na(fac, ipu5.out1b, xindex, re1) 
+  outlier_rpc_na(fac, opo5.out1b, xindex, re2) 
+  outlier_rpc_na(fac, opu5.out1b, xindex, re2) 
+  outlier_rpc_na(fac, ipo5.out1b, xindex, re2) 
+  outlier_rpc_na(fac, ipu5.out1b, xindex, re2) 
+}
+
+outlier_rpc_na("1210 HC Nakang", opo5, xindex, re2) # change zero to NA
+outlier_rpc_na("1210 HC Nakang", opu5, xindex, re2) # change zero to NA
+
+# Replaced (corrected; anc4/anc1 reversed)
+re1 <- data.rpc %>% 
+  filter(as.character(month) == "2018-05-01" & 
+           facilityname == "1308 DH Songkhon") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% 
+  as.numeric()
+re2 <- re1 + 1
+re3 <- re1 + 2
+re4 <- re1 + 3
+
+# Replace
+for (i in c(re1, re2, re3, re4)) {
+    outlier_rpc_m("1308 DH Songkhon", anc1, anc4c, i)
+    outlier_rpc_m("1308 DH Songkhon", anc4, anc1c, i)
+}
+
+# Remove replacement value
+for (i in c(re1, re2, re3, re4)) {
+    outlier_rpc_na("1308 DH Songkhon", anc1.out1b, xindex, i)
+    outlier_rpc_na("1308 DH Songkhon", anc4.out1b, xindex, i)
+}
+
+# Replaced (corrected; OP/IP reversed)
+re <- data.rpc %>% 
+  filter(as.character(month) == "2018-11-01" & 
+           facilityname == "0406 HC Sibounhuang") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% 
+  as.numeric()
+
+# Replace
+outlier_rpc_m("0406 HC Sibounhuang", opo5, ipo5c, re)
+outlier_rpc_m("0406 HC Sibounhuang", ipo5, opo5c, re)
+outlier_rpc_m("0406 HC Sibounhuang", opu5, ipu5c, re)
+outlier_rpc_m("0406 HC Sibounhuang", ipu5, opu5c, re)
+
+# Remove replacement value
+outlier_rpc_na("0406 HC Sibounhuang", opo5.out1b, xindex, re) 
+outlier_rpc_na("0406 HC Sibounhuang", opu5.out1b, xindex, re) 
+outlier_rpc_na("0406 HC Sibounhuang", ipo5.out1b, xindex, re) 
+outlier_rpc_na("0406 HC Sibounhuang", ipu5.out1b, xindex, re) 
+
+re1 <- data.rpc %>% 
+  filter(as.character(month) == "2015-10-01" & 
+           facilityname == "1804 DH Hom") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% 
+  as.numeric()
+re3 <- re1 + 2
+
+# Replace
+outlier_rpc_m("1804 DH Hom", opo5, ipo5c, re1:re3)
+outlier_rpc_m("1804 DH Hom", opu5, ipu5c, re1:re3)
+outlier_rpc_m("1804 DH Hom", ipo5, opo5c, re1:re3)
+outlier_rpc_m("1804 DH Hom", ipu5, opu5c, re1:re3)
+
+# Remove replacement values
+outlier_rpc_na("1804 DH Hom", opo5.out1b, xindex, re1:re3) 
+outlier_rpc_na("1804 DH Hom", opu5.out1b, xindex, re1:re3) 
+outlier_rpc_na("1804 DH Hom", ipo5.out1b, xindex, re1:re3) 
+outlier_rpc_na("1804 DH Hom", ipu5.out1b, xindex, re1:re3) 
+
+data.rpc <- data.rpc %>% 
+  dplyr::select(-c(opo5c, opu5c, ipo5c, ipu5c, anc1c, anc4c))
+
+# 16 PH Champasak (issue in inpatient reporting)
+re1 <- data.rpc %>% 
+  filter(as.character(month) == "2019-01-01" & 
+           facilityname == "1600 PH Champasak") %>%
+  dplyr::select(xindex) %>%
+  unique() %>% as.numeric()
+re3 <- re1 + 2
+re4 <- re1 - 3
+
+outlier_rpc_na("1600 PH Champasak", ipo5, xindex, re1:re3)
+outlier_rpc_na("1600 PH Champasak", ipu5, xindex, re4)
+
+data.rpc <- data.rpc %>% # functioning from 2017-10-01
+  mutate(across(ipu5_notcom:ipday, ~ case_when(
+    facilityname == "1609 HC Thanong" & year == 2016 ~ NA,
+    facilityname == "1201 HC Lammalat" & year == 2016 ~ NA,
+    facilityname == "1203 HC Dongkasin" & year == 2015 ~ NA,
+    facilityname == "1002 HC Napheng (Thoulakhom)" & quarter == 2019.1 ~ NA,
+    facilityname == "1001 HC Banthat (Phonhong)" & quarter == 2019.1 ~ NA,
+    TRUE ~ .x)))
+
+# Known outliers
+outlier_rpc_na("0200 PH Phongsali", ipday, as.character(month), "2019-01-01")
+outlier_rpc_na("0400 PH Oudomxai", ipday, as.character(month), "2015-10-01")
+
+outlier_rpc_na("0504 DH Pha-oudom", anc1, as.character(month), "2015-10-01")
+outlier_rpc_na("0504 DH Pha-oudom", anc1, as.character(month), "2016-03-01")
+outlier_rpc_na("0504 DH Pha-oudom", anc1, as.character(month), "2016-04-01")
+outlier_rpc_na("0504 DH Pha-oudom", anc4, as.character(month), "2015-10-01")
+outlier_rpc_na("0504 DH Pha-oudom", anc4, as.character(month), "2016-03-01")
+
+outlier_rpc_na("0600 PH Louangphabang", anc1, quarter, 2015.4)
+outlier_rpc_na("0600 PH Louangphabang", anc4, quarter, 2015.4)
+outlier_rpc_na("0609 DH Chomphet", anc1, quarter, 2015.4)
+
+outlier_rpc_na("0700 PH Houaphan", anc1, quarter, 2015.4)
+outlier_rpc_na("0700 PH Houaphan", anc4, quarter, 2015.4)
+
+outlier_rpc_na("0706 DH Xamtai", anc1, as.character(month), "2015-10-01")
+outlier_rpc_na("0704 DH Viangxai", opo5, as.character(month), "2015-10-01")
+
+outlier_rpc_na("0900 PH Xiangkhouang", ipday, as.character(month), "2015-11-01")
+outlier_rpc_na("1003 DH Keo-oudom", opu5, as.character(month), "2015-12-01")
+outlier_rpc_na("1300 PH Savannakhet", ipday, as.character(month), "2017-08-01")
+outlier_rpc_na("1600 PH Champasak", ipday, facilityname, "1600 PH Champasak") # unbalanced panel
+outlier_rpc_na("1700 PH Attau", ipday, as.character(month), "2019-03-01")
+outlier_rpc_na("1800 PH Xaisomboun", del, as.character(month), "2017-11-01")
+
+# Minor fix, based on review of plots
+outlier_rpc_na("1802 HC Nyamchaleunxai", opo5, as.character(month), "2017-04-01") # 10x outlier
+outlier_rpc_na("1201 HC Nadon", opu5, as.character(month), "2015-11-01")
+
+# ------------------------------------------------------------------------------
+# Dealing with outlier, zero, and missing values
+# ------------------------------------------------------------------------------
+
+avgoutlier <- data.rpc %>%
+    group_by(facilityname, levelm, faclevel) %>%
+    summarise(count = sum(ifelse(opo5.out1b >= 0, 1, 0), na.rm = TRUE))
+
+avgoutlier1 <- avgoutlier %>%
+    filter(count > 0) %>%
+    group_by(levelm, faclevel) %>%
+    summarise(mean = mean(count, na.rm = TRUE))
+
+avgoutlier1
+
+# Check zero and if they have replacement values (hospital only)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+hoszero <- data.rpc %>%
+    filter(faclevel != "HC") %>%
+    dplyr::select("facilityname", "xindex",
+           starts_with("op"),
+           starts_with("ip")) %>%
+    filter(opo5 == 0 | opu5 == 0 | ipo5 == 0 | ipu5 == 0 | ipday == 0)
+
+# Zero cases in the hospital does not appear to be an outlier.
+# 0101 DH Chanthabouli: single case
+# 0102 DH Sikhottabong: low utilization
+# 0103 DH Xaisettha: low utilization
+# 0104 DH Sisattanak: low utilization
+# 0202 DH Mai: low utilization
+# 0708 DH Et: low utilization
+# 0907 DH Phaxai: low utilization
+
+# Function to replace detected outliers
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Assessment and replacement done separately for hospital and health center, and pre- and post-NHI period. tsoutlier() function identified many false positives (below or above 3xIQR)
+#
+# For hospital:
+# > outlier: anything beyond 3xIQR, all replaced
+# > missing value: next section
+# For Health center: 
+# > outlier: anything beyond 3xIQR, selectively replaced if the median exceeded
+#            pre-defined quartile thresholds (0%, 25%, 50%, 75%) of all health centers
+# > missing value: next section
+#
+# The missing values at health centers likely represent unrecorded zeros rather than true absence of data. Pre-defined thresholds is applied to replace outliers only in health centers wth a sufficient number of valid data points
+
+outlier_rpc <- function(a, b, ths) {
+
+  data.rpc$med_ths <- NA
+  data.rpc$med_fac <- NA
+
+  data.rpc.hc <- data.rpc %>%
+    filter(faclevel == "HC") %>%
+    group_by(levelm) %>%
+    mutate(med_ths := quantile({{a}}, probs = c(ths), na.rm = TRUE)) %>%
+    ungroup %>%
+    group_by(facilityname, levelm) %>%
+    mutate(med_fac := median({{a}}, na.rm = TRUE)) %>%
+    filter(med_fac >= med_ths) %>%
+    ungroup()
+
+  data.rpc.hc <- data.rpc.hc %>%
+    filter(!is.na({{a}})) %>%
+    mutate({{a}} := ifelse(!is.na({{b}}), {{b}}, {{a}}))
+
+  data.rpc.hos <- data.rpc %>%
+    filter(faclevel != "HC") %>%
+    filter(!is.na({{a}})) %>%
+    mutate({{a}} := ifelse(!is.na({{b}}), {{b}}, {{a}}))
+  
+  data.rbn <- rbind(data.rpc.hc, data.rpc.hos)
+  list.drp <- unlist(data.rbn$faccodeindex)
+  data.kep <- filter(data.rpc, !(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep, data.rbn)
+
+  data.rpc <<- data.rbn2 %>%
+    arrange(facilityname, month)
+}
+
+# Check and replace outliers
+data.rpc.base1 <- data.rpc
+outlier_rpc(opo5, opo5.out1b, 0.00)  # Replace all values
+outlier_rpc(opu5, opu5.out1b, 0.25)
+outlier_rpc(ipo5, ipo5.out1b, 0.25)
+outlier_rpc(ipu5, ipu5.out1b, 0.75)
+
+outlier_rpc(ipday, ipday.out1b, 0.50)
+outlier_rpc(anc1, anc1.out1b, 0.75)
+outlier_rpc(anc4, anc4.out1b, 0.75)
+outlier_rpc(del, del.out1b, 0.75)
+outlier_rpc(pnc, pnc.out1b, 0.75)
+outlier_rpc(fic1, fic1.out1b, 0.75)
+
+outcome.list <- c(
+    "faccodeindex",
+    "opo5", "opu5", "ipo5", "ipu5", "ipday",
+    "smsrgo5", "smsrgu5",
+    "anc1", "anc4", "pnc", "del",
+    "fic1")
+
+data.b <- data.rpc.base1[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat
+
+# Function to replace nonsensical cases
+#                                       PH/DH           HC
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Nonsensical if (examples):
+# Outpatient aged <5 higher than >=5    all             those above threshold
+# Inpatient aged <5 higher than >=5     all             those above threshold
+# Inpatient higher than outpatient      all             those above threshold
+# Inpatient higher than inpatient-day   all             those above threshold
+# ANC1 higher than opo5                 all             those above threshold
+# ANC4 higher than opo5                 all             those above threshold
+# PNC higher than anc1                  all             those above threshold
+
+# If nonsensical,
+# 1) Replace with replacement value from outlier assessment
+# 2) Replace with NA if no replacement value from outlier assessment
+# Replacement is done separately for pre- and post-NHI periods
+# > Hospital: no threshold applied; all replaced
+# > Health center: selectively replaced if the median exceeded pre-defined quartile 
+#                  thresholds (0%, 25%, 50%, 75%) of all health centers
+
+# Smaller than
+# a = value to be checked
+# b = reference value
+# formula checks if 'a' is smaller than 'b' (e.g., opo5 < opu5 )
+# c = replacement value for a (if available)
+# d = threshold for health center
+
+outlier_rpc_s <- function(a, b, rpc, ths) {
+  data.rpc$med_ths <- NA
+  data.rpc$med_fac <- NA
+  
+  data.rpc.hc <- data.rpc %>%
+    filter(faclevel == "HC") %>%
+    group_by(levelm) %>%
+    mutate(med_ths := quantile({{a}}, probs = c(ths), na.rm = TRUE)) %>%
+    ungroup() %>%
+    group_by(facilityname, levelm) %>%
+    mutate(med_fac := median({{a}}, na.rm = TRUE)) %>%
+    filter(med_fac >= med_ths) %>%
+    ungroup()
+  
+  data.rpc.hc <- data.rpc.hc %>%
+    filter(!is.na({{a}}), !is.na({{b}})) %>%
+    mutate({{a}} := ifelse({{a}} < {{b}} & !is.na({{rpc}}), {{rpc}}, {{a}}))
+
+  data.rpc.hos <- data.rpc %>%
+    filter(faclevel != "HC") %>%
+    filter(!is.na({{a}}), !is.na({{b}})) %>%
+    mutate({{a}} := ifelse({{a}} < {{b}} & !is.na({{rpc}}), {{rpc}}, {{a}}))
+
+  data.rbn <- rbind(data.rpc.hc,data.rpc.hos)
+  list.drp <- unlist(data.rbn$faccodeindex)
+  data.kep <- filter(data.rpc,!(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep,data.rbn)
+  
+  data.rbn <- rbind(data.rpc.hc, data.rpc.hos)
+  list.drp <- unlist(data.rbn$faccodeindex)
+  data.kep <- filter(data.rpc, !(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep, data.rbn)
+
+  data.rpc <<- data.rbn2 %>%
+    arrange(facilityname, month)
+}
+
+# Compare and replace
+data.rpc.base2 <- data.rpc
+outlier_rpc_s(opo5, opu5, opo5.out1b, 0.00) # opo5 < opu5, replace opo5
+outlier_rpc_s(ipo5, ipu5, ipo5.out1b, 0.00) # ipo5 < ipu5, replace ipo5
+outlier_rpc_s(opo5, ipo5, opo5.out1b, 0.00) # opo5 < ipo5, replace opo5
+outlier_rpc_s(opu5, ipu5, opu5.out1b, 0.00) # opu5 < ipu5, replace opu5
+outlier_rpc_s(opo5, anc1, opo5.out1b, 0.00) # opo5 < anc1, replace opo5
+outlier_rpc_s(opo5, anc4, opo5.out1b, 0.00) # opo5 < anc4, replace opo5
+outlier_rpc_s(ipo5, del, ipo5.out1b, 0.00) # ipo5 < del, replace ipo5
+outlier_rpc_s(ipday, ipo5, ipday.out1b, 0.00) # ipday < ipo5, replace ipday
+outlier_rpc_s(ipday, ipu5, ipday.out1b, 0.00) # ipday < ipu5, replace ipday
+
+# When apply thresholds: zero replacement
+# outlier_rpc_s(opo5, opu5, opo5.out1b, 0.00) # opo5 < opu5, replace opo5
+# outlier_rpc_s(ipo5, ipu5, ipo5.out1b, 0.25) # ipo5 < ipu5, replace ipo5
+# outlier_rpc_s(opo5, ipo5, opo5.out1b, 0.00) # opo5 < ipo5, replace opo5
+# outlier_rpc_s(opu5, ipu5, opu5.out1b, 0.25) # opu5 < ipu5, replace opu5
+# outlier_rpc_s(opo5, anc1, opo5.out1b, 0.00) # opo5 < anc1, replace opo5
+# outlier_rpc_s(opo5, anc4, opo5.out1b, 0.00) # opo5 < anc4, replace opo5
+# outlier_rpc_s(ipo5, del, ipo5.out1b, 0.25) # ipo5 < del, replace ipo5
+# outlier_rpc_s(ipday, ipo5, ipday.out1b, 0.50) # ipday < ipo5, replace ipday
+# outlier_rpc_s(ipday, ipu5, ipday.out1b, 0.50) # ipday < ipu5, replace ipday
+
+data.b <- data.rpc.base2[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat # 100% already replaced (those that have outlier assessment value)
+
+# Greater than
+# a = reference value
+# b = value to be checked
+# formula checks if 'b' is greater than 'a' (e.g., opo5 < opu5 )
+# c = replacement value for b (if available)
+# d = threshold for health center
+
+outlier_rpc_g <- function(a, b, rpc, ths) {
+  data.rpc$med_ths <- NA
+  data.rpc$med_fac <- NA
+        
+  data.rpc.hc <- data.rpc %>%
+    filter(faclevel == "HC") %>%
+    group_by(levelm) %>%
+    mutate(med_ths := quantile({{b}}, probs = c(ths), na.rm = TRUE)) %>%
+    ungroup() %>%
+    group_by(facilityname, levelm) %>%
+    mutate(med_fac := median({{b}}, na.rm = TRUE)) %>%
+    filter(med_fac >= med_ths) %>%
+    ungroup()
+
+  data.rpc.hc <- data.rpc.hc %>%
+    filter(!is.na({{a}}), !is.na({{b}})) %>%
+    mutate({{b}} := ifelse({{a}} < {{b}} & !is.na({{rpc}}), {{rpc}}, {{b}}))
+
+  data.rpc.hos <- data.rpc %>%
+    filter(faclevel != "HC") %>%
+    filter(!is.na({{a}}), !is.na({{b}})) %>%
+    mutate({{b}} := ifelse({{a}} < {{b}} & !is.na({{rpc}}), {{rpc}}, {{b}}))
+  
+  data.rbn <- rbind(data.rpc.hc, data.rpc.hos)
+  list.drp <- unlist(data.rbn$faccodeindex)
+  data.kep <- filter(data.rpc, !(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep, data.rbn)
+
+  data.rpc <<- data.rbn2 %>% 
+    arrange(facilityname, month)
+}
+
+# Compare and replace
+data.rpc.base3 <- data.rpc
+outlier_rpc_g(opo5, opu5, opu5.out1b, 0.00) # opo5 < opu5, replace opu5
+outlier_rpc_g(ipo5, ipu5, ipu5.out1b, 0.00) # ipo5 < ipu5, replace ipu5
+outlier_rpc_g(opo5, ipo5, ipo5.out1b, 0.00) # opo5 < ipo5, replace ipo5
+outlier_rpc_g(opu5, ipu5, ipu5.out1b, 0.00) # opu5 < ipu5, replace ipu5
+outlier_rpc_g(opo5, anc1, anc1.out1b, 0.00) # opo5 < anc1, replace anc1
+outlier_rpc_g(opo5, anc4, anc4.out1b, 0.00) # opo5 < anc4, replace anc4
+outlier_rpc_g(ipo5, del, del.out1b, 0.00) # ipo5 < del, replace del
+outlier_rpc_g(ipday, ipo5, ipo5.out1b, 0.00) # ipday < ipo5, replace ipo5
+outlier_rpc_g(ipday, ipu5, ipu5.out1b, 0.00) # ipday < ipu5, replace ipu5
+
+# When apply thresholds: zero replacement
+# outlier_rpc_g(opo5, opu5, opu5.out1b, 0.25) # opo5 < opu5, replace opu5
+# outlier_rpc_g(ipo5, ipu5, ipu5.out1b, 0.75) # ipo5 < ipu5, replace ipu5
+# outlier_rpc_g(opo5, ipo5, ipo5.out1b, 0.25) # opo5 < ipo5, replace ipo5
+# outlier_rpc_g(opu5, ipu5, ipu5.out1b, 0.75) # opu5 < ipu5, replace ipu5
+# outlier_rpc_g(opo5, anc1, anc1.out1b, 0.75) # opo5 < anc1, replace anc1
+# outlier_rpc_g(opo5, anc4, anc4.out1b, 0.75) # opo5 < anc4, replace anc4
+# outlier_rpc_g(ipo5, del, del.out1b, 0.75) # ipo5 < del, replace del
+# outlier_rpc_g(ipday, ipo5, ipo5.out1b, 0.25) # ipday < ipo5, replace ipo5
+# outlier_rpc_g(ipday, ipu5, ipu5.out1b, 0.75) # ipday < ipu5, replace ipu5
+
+data.b <- data.rpc.base3[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat 
+# 100% already replaced (those that have outlier assessment value)
+
+
+# Hospital, replace with NA
+# Smaller but no replacement value, replace with NA (hospital only)
+
+# Priority is given to lower outliers; these are replaced with missing values (NA).
+# Reference values are low or near zero; values below indicate potential issues.
+# This aims to improve detection of extreme upper outliers in the second assessment round.
+
+outlier_rpc_s_hosna <- function(a, b, rpc) {
+  data.rpc.hos <- data.rpc %>%
+    filter(faclevel != "HC") %>%
+    filter(!is.na({{a}}), !is.na({{b}})) %>%
+    mutate({{a}} := ifelse({{a}} < {{b}} & !is.na({{rpc}}), {{rpc}},
+                           ifelse({{a}} < {{b}} & is.na({{rpc}}), NA, {{a}})))
+
+  list.drp <- unlist(data.rpc.hos$faccodeindex)
+  data.kep <- filter(data.rpc, !(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep, data.rpc.hos)
+    
+  data.rpc <<- data.rbn2 %>%
+    arrange(facilityname, month)
+}
+
+data.rpc.base3 <- data.rpc
+outlier_rpc_s_hosna(opo5, opu5, opo5.out1b) # opo5 < opu5, replace opo5
+outlier_rpc_s_hosna(ipo5, ipu5, ipo5.out1b) # ipo5 < ipu5, replace ipo5
+outlier_rpc_s_hosna(opo5, ipo5, opo5.out1b) # opo5 < ipo5, replace opo5
+outlier_rpc_s_hosna(opu5, ipu5, opu5.out1b) # opu5 < ipu5, replace opu5
+outlier_rpc_s_hosna(opo5, anc1, opo5.out1b) # opo5 < anc1, replace opo5
+outlier_rpc_s_hosna(opo5, anc4, opo5.out1b) # opo5 < anc4, replace opo5
+#outlier_rpc_s_hosna(ipo5, del, ipo5.out1b) # ipo5 < del, replace ipo5 - issue for DH Mai
+outlier_rpc_s_hosna(ipday, ipo5, ipday.out1b) # ipday < ipo5, replace ipday
+outlier_rpc_s_hosna(ipday, ipu5, ipday.out1b) # ipday < ipu5, replace ipday
+
+data.b <- data.rpc.base3[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat
+
+# Greater but no replacement value, replace with NA (hospital only)
+outlier_rpc_g_hosna <- function(a, b, rpc) {
+        
+  data.rpc.hos <- data.rpc %>%
+    filter(faclevel != "HC") %>%
+    filter(!is.na({{a}}), !is.na({{b}})) %>%
+    mutate({{b}} := ifelse({{a}} < {{b}} & !is.na({{rpc}}), {{rpc}},
+                           ifelse({{a}} < {{b}} & is.na({{rpc}}), NA, {{b}})))
+
+  list.drp <- unlist(data.rpc.hos$faccodeindex)
+  data.kep <- filter(data.rpc, !(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep, data.rpc.hos)
+
+  data.rpc <<- data.rbn2 %>% 
+    arrange(facilityname, month)
+}
+
+data.rpc.base4 <- data.rpc
+outlier_rpc_g_hosna(opo5, opu5, opu5.out1b) # opo5 < opu5, replace opu5
+outlier_rpc_g_hosna(ipo5, ipu5, ipu5.out1b) # ipo5 < ipu5, replace ipu5
+outlier_rpc_g_hosna(opo5, ipo5, ipo5.out1b) # opo5 < ipo5, replace ipo5
+outlier_rpc_g_hosna(opu5, ipu5, ipu5.out1b) # opu5 < ipu5, replace ipu5
+outlier_rpc_g_hosna(opo5, anc1, anc1.out1b) # opo5 < anc1, replace anc1
+outlier_rpc_g_hosna(opo5, anc4, anc4.out1b) # opo5 < anc4, replace anc4
+#outlier_rpc_g_hosna(anc1,anc4,anc4.out1b) # anc1 < anc4, replace anc4
+outlier_rpc_g_hosna(ipo5, del, del.out1b) # ipo5 < del, replace del
+outlier_rpc_g_hosna(ipday, ipo5, ipo5.out1b) # ipday < ipo5, replace ipo5
+outlier_rpc_g_hosna(ipday, ipu5, ipu5.out1b) # ipday < ipu5, replace ipu5
+
+data.b <- data.rpc.base4[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat
+
+# Summary of total non-sensical cases replaced
+data.b <- data.rpc.base2[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat
+# values changed to NA (value.y) will be replaced in the 2nd round of imputation process
+
+# ------------------------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------------------------
+
+# Hospital
+# Pre-NHI
+data.b <- data.rpc.base2 %>%
+  filter(faclevel != "HC", levelm == 0, facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.rpc %>%
+  filter(faclevel != "HC", levelm == 0, facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+hosdif.pre <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("Hos", 0) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(
+    missing_replaced = sum(is.na(values)),
+    out_replaced = sum(!is.na(values)))
+
+# Post-NHI
+data.b <- data.rpc.base2 %>% 
+  filter(faclevel != "HC", levelm == 1, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.rpc %>% 
+  filter(faclevel != "HC", levelm == 1, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+hosdif.post <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("Hos", 1) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(
+    missing_replaced = sum(is.na(values)),
+    out_replaced = sum(!is.na(values)))
+
+# Health center
+# pre-NHI
+data.b <- data.rpc.base2 %>% 
+  filter(faclevel == "HC", levelm == 0, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.rpc %>% 
+  filter(faclevel == "HC", levelm == 0, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+hcdif.pre <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("HC", 0) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(
+    missing_replaced = sum(is.na(values)),
+    out_replaced = sum(!is.na(values)))
+
+# Post-NHI
+data.b <- data.rpc.base2 %>% 
+  filter(faclevel == "HC", levelm == 1, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.rpc %>% 
+  filter(faclevel == "HC", levelm == 1, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+hcdif.post <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("HC", 1) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(
+    missing_replaced = sum(is.na(values)),
+    out_replaced = sum(!is.na(values)))
+
+# output 'n': total # of values replaced
+# output 'NAs': # of missing values replaced
+
+nonsenlist <- list(hosdif.pre, hosdif.post, hcdif.pre, hcdif.post)
+nonsenunlist <- do.call("rbind", nonsenlist) %>%
+    print(n = Inf) %>%
+    dplyr::select(-c("missing_replaced")) %>%
+    rename("nonsense" = "out_replaced") %>%
+    print(n = Inf)
+
+# Summary of outliers and non-sensical cases replaced
+data.b <- data.rpc.base1[, outcome.list] # base 
+data.c <- data.rpc[, outcome.list] # imputed
+diffstat <- summary(comparedf(data.b, data.c))
+diffstat
+
+# Some visible outliers:
+# 0107 HC Bo-o
+# 0503 HC Phadam
+# 0504 DH Pha-oudom
+# 1209 HC Namkapo
+
+colSums(table(data.rpc$faccode, data.rpc$faclevel))/
+  length(unique(data.rpc$xindex))
+
+write_xlsx(data.rpc, "./data export/02_clean_3_rpc.xlsx") 
+
+# [Not applied]
+# OPD includes small surgery
+# district-level analysis: keep small surgery
+# facility-level analysis: small surgery to be deducted
+
+```
+<br>
+
+# Missing values
+<br>
+```{r missing, warning=FALSE}
+
+# data.rpc <- read_excel("./data export/02_clean_3_rpc.xlsx", guess_max = 100000)
+
+data.mis <- data.rpc
+data.mis <- dplyr::select(data.mis, -contains(c(".out1a", ".out1b")))
+
+mv.list = list()
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday", 
+               "smsrgo5", "smsrgu5", 
+               "anc1", "anc4", "pnc", "del", 
+               "opob1o5", "ipob1o5", 
+               "fic1")
+level.names <- c(0, 1)
+
+# Loop to identify missing values and remaining outliers, and generate replacement values using tsclean function from the 'forecast' package, not the 'tsoutliers' package.
+# tsclean output is linked with xindex
+
+# Interpolate missing values in a time series:
+# https://pkg.robjhyndman.com/forecast/reference/na.interp.html
+# "By default, uses linear interpolation for non-seasonal series. For seasonal series, a robust STL decomposition is first computed. Then a linear interpolation is applied to the seasonally adjusted data, and the seasonal component is added back."
+
+for (k in 1:length(level.names)) {
+  data.mv <- data.mis %>% filter(levelm == level.names[k])
+  mv.list[[k]] = list()
+    
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  data.mv1 <- data.mv %>% group_by(faccode)
+  data.mv2 <- filter(data.mv1, sum(!is.na(!!variable)) >= 3)
+  fac.ls <- unique(data.mv2$faccode)
+  mv.list[[k]][[j]] = list()
+        
+for (i in 1:length(fac.ls)) {
+  data.mv3 <- filter(data.mv2, faccode == fac.ls[i])
+  data.mv4 <- dplyr::select(ungroup(data.mv3), xindex, !!variable) %>% as.data.frame()
+  data.mv5 <- data.mv4[, 2]
+  data.mv4ts <- ts(unlist(data.mv4[, var.names[j]]), frequency = 12) # seasonality applied
+  data.mv6 <- tsclean(data.mv4ts) %>% as.data.frame()
+  # data.mv6 <- tsclean(unlist(data.mv4[, var.names[j]])) %>% as.data.frame()
+  colnames(data.mv6) <- "x"
+  data.mv6$type <- NA
+  data.mv7 <- data.mv6 %>%
+    mutate(
+      x = ifelse(is.na(data.mv5), x, ifelse(data.mv5 != data.mv6, x, NA)),
+      type = ifelse(is.na(data.mv5), "missing", 
+                    ifelse(data.mv5 != data.mv6, "outlier", NA)))
+  data.mv8 <- cbind(data.mv4$xindex, data.mv7)
+  data.mv8 <- as.data.frame(data.mv8)
+  data.mv8$faccode <- fac.ls[i]
+  data.mv8$outcome <- var.names[j]
+  data.mv8$level <- level.names[k]
+  colnames(data.mv8) <- c("xindex", "replace", "type", "faccode", "outcome", "levelm")
+  mv.list[[k]][[j]][[i]] <- data.mv8
+}}}
+
+mv.pre <- do.call(rbind, c(unlist(mv.list[[1]], recursive = FALSE),
+                           make.row.names = FALSE))
+mv.post <- do.call(rbind, c(unlist(mv.list[[2]], recursive = FALSE),
+                            make.row.names = FALSE))
+# mv.pre <- mv.pre %>% filter(type == "NA") # only NA
+# mv.post <- mv.post %>% filter(type == "NA") # only NA
+
+mv.sp <- spread(rbind(mv.pre, mv.post), key = outcome, value = replace)
+
+mv.sp.out <- mv.sp %>%
+ filter(type == "outlier") %>%
+ dplyr::select(-type) %>%
+ setNames(c("xindex", "faccode", "levelm",
+            paste0(names(.)[4:ncol(.)], ".out2")))
+
+mv.sp.mis <- mv.sp %>%
+ filter(type == "missing") %>%
+ dplyr::select(-type) %>%
+ setNames(c("xindex", "faccode", "levelm",
+            paste0(names(.)[4:ncol(.)], ".mis")))
+
+data.mis <- data.mis %>%
+  left_join(mv.sp.out, by = c("faccode", "xindex", "levelm")) %>%
+  left_join(mv.sp.mis, by = c("faccode", "xindex", "levelm")) %>%
+  arrange(facilityname, month)
+
+write_xlsx(data.mis, "./data export/02_clean_4_mis.xlsx")
+
+```
+<br>
+
+# Missing value plot (Round 2; including raw and imputed in Round 1a or 1b)
+<br>
+```{r missing plot, message=FALSE, warning=FALSE}
+
+# data.mis <- read_excel("./data export/02_clean_4_mis.xlsx", guess_max = 100000)
+
+# Index
+data.mis$icpindex <- data.mis$xindex * data.mis$inceptm
+icpidxm <- data.mis %>%
+  dplyr::select(province, icpindex) %>%
+  unique() %>%
+  filter(icpindex > 0)
+icpidx <- c(0, icpidxm$icpindex)
+
+str(data.mis$month)
+
+mchidx <- data.mis %>%
+  filter(as.character(month) == "2017-10-01") %>%
+  dplyr::select(xindex) %>%
+  unique() %>%
+  as.integer()
+
+m122015idx <- data.mis %>%
+  filter(as.character(month) == "2015-12-01") %>%
+  dplyr::select(xindex) %>%
+  unique() %>%
+  as.integer()
+
+# Create folders
+fc <- c("./clean")
+f3m <- c("/4.missing")
+if(!dir.exists(fc)) {dir.create(fc)}
+if(!dir.exists(paste0(fc, f3m))) {dir.create(paste0(fc, f3m))}
+if(!dir.exists(paste0(fc, f3m, "/hos"))) {dir.create(paste0(fc, f3m, "/hos"))}
+
+# Generate trend plot by province (all variables)
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+
+# outlier value (round 1) - removed: black
+out1.names <- paste0(var.names, ".blk")
+# outlier value replacement (round 1) - replaced outlier: green
+rpc1.names <- paste0(var.names, ".grn")
+# missing value replacement (round 2) - suggested imputation value: blue
+mis.names <- paste0(var.names, ".mis")
+# outlier value replacement (round 2) - suggested imputation value: red
+out2.names <- paste0(var.names, ".out2")
+
+# Add data points
+# black: outlier value (round 1) - removed
+# green: imputed value (round 1) - replaced outlier
+
+# Append baseline data data
+data.base <- read_excel("./data export/02_clean_2_out1b.xlsx", guess_max = 100000)
+
+nprc.names <- c("faccodeindex", var.names)
+data.nrpc <- data.base %>%
+ dplyr::select(all_of(nprc.names)) %>%
+ setNames(c("faccodeindex",
+            paste0(names(.)[2:ncol(.)], ".raw")))
+
+plot.mis <- left_join(data.mis, data.nrpc, by = "faccodeindex")
+
+# Loop to append raw and replaced data points
+raw.names <- colnames(data.nrpc[, 2:ncol(data.nrpc)])
+rpc.names <- var.names
+
+for(i in 1:length(raw.names)) {
+  raw2 <- rlang::sym(raw.names[i])
+  rpc2 <- rlang::sym(rpc.names[i])
+  
+  plot.mis <- plot.mis %>% 
+    mutate("{{rpc2}}.blk" := ifelse(!!raw2 == !!rpc2, NA, !!raw2)) # black dot (raw)
+  plot.mis <- plot.mis %>%
+    mutate("{{rpc2}}.grn" := ifelse(!!raw2 == !!rpc2, NA, !!rpc2)) # green dot (replaced)
+  plot.mis <<- plot.mis
+}
+
+hgt <- c(
+  10, 10, 10, 15, 10, 20, 20, 20, 
+  15, 15, 10, 20, 30, 20, 8, 20, 
+  10, 6)
+
+for (j in 1:length(var.names)) {
+  for (i in 1:18) {
+    variable <- rlang::sym(var.names[j])
+    out1 <- rlang::sym(out1.names[j])
+    rpc1 <- rlang::sym(rpc1.names[j])
+    mis <- rlang::sym(mis.names[j])
+    out2 <- rlang::sym(out2.names[j])
+              
+    plot <- ggplot(subset(plot.mis, pnum == i), 
+                   aes(x = xindex, y = !!variable)) +
+      geom_rect(aes(xmin = 0, xmax = m122015idx, ymin = 0, ymax = Inf),
+                fill = alpha("#FFCC33", 0.9)) +
+      geom_point(color = "grey") +
+      ylim(0, NA) +
+      geom_point(aes(y = !!out1), col = "black") + # raw outlier value (R1)
+      geom_point(aes(y = !!rpc1), col = "green") + # replaced outlier value (R1)
+      geom_point(aes(y = !!mis), col = "blue") + # suggested replacement for missing
+      geom_point(aes(y = !!out2), col = "red") + # suggested replacement for outlier (R2)
+      facet_wrap(~facilityname, ncol = 5, scales = "free") +
+      geom_vline(aes(xintercept = icpidx[i]), linetype = "dashed",
+                 col = "black", alpha = 0.6) +
+      geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+                 col = "blue", alpha = 0.6) +
+      theme_light() +
+      theme(
+        panel.border = element_rect(colour = "grey90"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = -0.125),
+        strip.text = element_text(color = 'black', size = 7, face = "bold"),
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_rect(fill = "grey90")) +
+        guides(fill = guide_legend(nrow = 1))
+    
+    png(paste("./clean/4.missing/", var.names[j], "_p", i, ".png", sep = ""),
+        units = "in", width = 6.5, height = hgt[i], res = 400)
+    print(plot)
+    dev.off()
+}}
+
+# Hospital only (legend not working)
+plot.mis.hos <- plot.mis %>%
+  filter(faclevel %in% c("PH", "DH"))
+hgt <- c(30)
+
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  out1 <- rlang::sym(out1.names[j])
+  rpc1 <- rlang::sym(rpc1.names[j])
+  mis <- rlang::sym(mis.names[j])
+  out2 <- rlang::sym(out2.names[j])
+
+  plot <- ggplot(subset(plot.mis.hos), aes(x = xindex, y = !!variable)) +
+    geom_rect(aes(xmin = 0, xmax = m122015idx, ymin = 0, ymax = Inf),
+              fill = alpha("#FFCC33", 0.9)) +
+    geom_point(color = "grey") +
+    ylim(0, NA) +
+    geom_point(aes(y = !!out1), col = "black") + # raw outlier value (R1)
+    geom_point(aes(y = !!rpc1), col = "green") + # replaced outlier value (R1)
+    geom_point(aes(y = !!mis),  col = "blue") + # suggested replacement for missing
+    geom_point(aes(y = !!out2), col = "red") + # suggested replacement for outlier (R2)
+    facet_wrap(~facilityname, ncol = 5, scales = "free") +
+    geom_vline(aes(xintercept = icpidx[i]), linetype = "dashed",
+               col = "black", alpha = 0.6) + # start of NHI (06/2016)
+    geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+               col = "blue", alpha = 0.6) + # MCH integration (10/2017)
+    scale_color_manual(
+      name = "Data",
+      breaks = c("Outlier removed",
+                 "Replacement (outlier R1)",
+                 "Replacement (missing value)",
+                 "Replacement (outlier R2)"),
+      values = c("Outlier removed" = "black",
+                 "Replacement (outlier R1)" = "green",
+                 "Replacement (missing value)" = "blue",
+                 "Replacement (outlier R2)" = "red")) +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      legend.title = element_blank(),
+      legend.position = "bottom",
+      legend.text = element_text(size = 15),
+      strip.text = element_text(color = 'black', size = 7, face = "bold"),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+      strip.background = element_rect(fill = "grey90")) +
+    guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/4.missing/hos/", var.names[j], ".png", sep = ""),
+      units = "in", width = 6.5, height = hgt, res = 400)
+  print(plot)
+  dev.off()
+}
+
+```
+<br>
+
+# Imputation
+<br>
+```{r impute, warning=FALSE}
+
+# data.mis <- read_excel("./data export/02_clean_4_mis.xlsx", guess_max = 100000)
+
+data.imp <- data.mis
+
+# .mis: replacement value for missing data
+# .out2: replacement value for outlier (round 2)
+
+# Criteria:
+# Hospital data -> impute all variables
+# Health center -> Impute only if the following conditions are met:
+# (a) The median value exceeds the quantile threshold (no distinction 
+# between pre- and post-periods); (b) The number of missing observations is 
+# three or fewer (≤ 3), completeness satisfied; (c) Not imputed if there are
+# more than three missing observations (> 3), unclear whether data is truly missing
+# Imputation is always done for both sides ('levelm' not considered)
+
+# ------------------------------------------------------------------------------
+# Replace missing values
+# ------------------------------------------------------------------------------
+
+impute_rpc <- function(a, b, ths) {
+  data.imp$med_ths <- NA
+  data.imp$med_fac <- NA
+
+  data.imp.hc <- data.imp %>%
+    filter(faclevel == "HC") %>%
+    mutate(med_ths := quantile({{a}}, probs = c(ths), na.rm = TRUE)) %>%
+    ungroup() %>%
+    group_by(facilityname) %>%
+    mutate(med_fac := median({{a}}, na.rm = TRUE)) %>%
+    filter(med_fac >= med_ths) %>%
+    ungroup()
+
+  data.imp.hc <- data.imp.hc %>%
+    group_by(facilityname) %>%
+    filter(sum(is.na({{a}})) <= 3) %>%
+    mutate({{a}} := ifelse(is.na({{a}}) & !is.na({{b}}), {{b}}, {{a}})) %>%
+    ungroup()
+
+  data.imp.hos <- data.imp %>%
+    filter(faclevel != "HC") %>%
+    mutate({{a}} := ifelse(is.na({{a}}) & !is.na({{b}}), {{b}}, {{a}}))
+
+  data.rbn <- rbind(data.imp.hc, data.imp.hos)
+
+  list.drp <- unlist(data.rbn$faccodeindex)
+  data.kep <- filter(data.imp, !(faccodeindex %in% list.drp))
+
+  data.rbn2 <- rbind(data.kep, data.rbn)
+  data.imp <<- data.rbn2 %>% arrange(facilityname, month)
+}
+
+# Impute missing values
+data.imp.be <- data.imp
+impute_rpc(opo5, opo5.mis, 0.00)
+impute_rpc(opu5, opu5.mis, 0.25)
+impute_rpc(ipo5, ipo5.mis, 0.25)
+impute_rpc(ipu5, ipu5.mis, 0.75)
+impute_rpc(ipday, ipday.mis, 0.50)
+impute_rpc(anc1, anc1.mis, 0.75)
+impute_rpc(anc4, anc4.mis, 0.75)
+impute_rpc(del, del.mis, 0.75)
+impute_rpc(pnc, pnc.mis, 0.75)
+
+# Impute missing values for ipday (certain that ipo5>0 or ipu5>0, data is missing)
+# Hospitals are already imputed / only HCs that meet the criteria
+
+# [Not implemented]
+# data.imp <- data.imp %>%
+#  mutate(ipday=ifelse(is.na(ipday),
+#                       ifelse(ipo5>0|ipu5>0,ipday.mis,ipday),ipday)) %>%
+#  arrange(facilityname,month)
+
+# Check the difference
+outcome.list <- c("faccodeindex",
+                  "opo5", "opu5", "ipo5", "ipu5", "ipday",
+                  "smsrgo5", "smsrgu5",
+                  "anc1", "anc4", "pnc", "del",
+                  "opob1o5", "ipob1o5",
+                  "fic1")
+
+# Hospital
+data.b <- data.imp.be %>%
+  filter(faclevel != "HC", facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+data.c <- data.imp %>%
+  filter(faclevel != "HC", facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+summary(comparedf(data.b, data.c))
+
+# Health center
+data.b <- data.imp.be %>%
+  filter(faclevel == "HC", facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+data.c <- data.imp %>%
+  filter(faclevel == "HC", facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+summary(comparedf(data.b, data.c))
+
+# output 'n': total # of values replaced
+# output 'NAs': # of missing values replaced
+
+# ------------------------------------------------------------------------------
+# Replace outliers round 2 (final replacement)
+# ------------------------------------------------------------------------------
+
+outlier_rpc2 <- function(a, b, ths) {
+  data.imp$med_ths <- NA
+  data.imp$med_fac <- NA
+        
+  data.imp.hc <- data.imp %>%
+    filter(faclevel == "HC") %>%
+    group_by(levelm) %>%
+    mutate(med_ths := quantile({{a}}, probs = c(ths), na.rm = TRUE)) %>%
+    ungroup() %>%
+    group_by(facilityname, levelm) %>%
+    mutate(med_fac := median({{a}}, na.rm = TRUE)) %>%
+    filter(med_fac >= med_ths) %>%
+    ungroup()
+  
+  data.imp.hc <- data.imp.hc %>%
+    filter(!is.na({{a}})) %>%
+    mutate({{a}} := ifelse(!is.na({{b}}), {{b}}, {{a}}))
+        
+  data.imp.hos <- data.imp %>%
+    filter(faclevel != "HC") %>%
+    filter(!is.na({{a}})) %>%
+    mutate({{a}} := ifelse(!is.na({{b}}), {{b}}, {{a}}))
+
+  data.rbn <- rbind(data.imp.hc, data.imp.hos)
+  list.drp <- unlist(data.rbn$faccodeindex)
+  data.kep <- filter(data.imp, !(faccodeindex %in% list.drp))
+  data.rbn2 <- rbind(data.kep, data.rbn)
+  data.imp <<- data.rbn2 %>% arrange(facilityname,month)
+}
+
+data.imp.be <- data.imp
+outlier_rpc2(opo5, opo5.out2, 0.00)
+outlier_rpc2(opu5, opu5.out2, 0.25)
+outlier_rpc2(ipo5, ipo5.out2, 0.25)
+outlier_rpc2(ipu5, ipu5.out2, 0.75)
+outlier_rpc2(ipday, ipday.out2, 0.50)
+outlier_rpc2(anc1, anc1.out2, 0.75)
+outlier_rpc2(anc4, anc4.out2, 0.75)
+outlier_rpc2(del, del.out2, 0.75)
+outlier_rpc2(pnc, pnc.out2, 0.75)
+
+# Replace negative values with zero
+data.imp <- data.imp %>%
+  mutate(across(opu5_notcom:fic1,
+                ~ ifelse(.x < 0, 0, .x)))
+
+# Hospital
+data.b <- data.imp.be %>% 
+  filter(!faclevel == "HC", facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+data.c <- data.imp %>%
+  filter(!faclevel == "HC", facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+summary(comparedf(data.b, data.c))
+
+# Health center
+data.b <- data.imp.be %>% 
+  filter(faclevel == "HC", facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+data.c <- data.imp %>% 
+  filter(faclevel == "HC", facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+summary(comparedf(data.b, data.c))
+
+
+write_xlsx(data.imp,"./data export/02_clean_5_imp.xlsx")
+
+```
+<br>
+
+# Data quality, compare data frame (raw vs imputed)
+<br>
+```{r compare, warning=FALSE}
+
+# data.fan <- read_excel("./data export/02_clean_3_fan.xlsx", guess_max = 100000)
+# data.imp <- read_excel("./data export/02_clean_5_imp.xlsx", guess_max = 100000)
+
+data.qul <- data.fan
+
+# data quality table: zero, non-zero and NA by facility level
+data.list <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "pnc", "del",
+               "opob1o5", "ipob1o5", "fic1",
+               "faclevel", "levelm")
+
+rmax <- max(data.qul$xindex)
+data.qul <- data.qul %>%
+  filter(facnum == 1) %>%  # month the health facility is operating
+  dplyr::select(all_of(data.list)) %>%
+  mutate(faclevel2 = ifelse(faclevel == "HC", "HC", "Hos")) %>%
+  dplyr::select(-faclevel) %>%
+  gather(var, value, -faclevel2, -levelm) %>%
+  group_by(var, faclevel2, levelm) %>%
+  count(value != 0) %>%
+  print(n = Inf) %>%
+  spread("value != 0", n) %>%
+  setNames(c("var", "level", "prepost", "zero", "nonzero", "missing")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(zero = sum(zero, na.rm = TRUE),
+            nonzero = sum(nonzero, na.rm = TRUE),
+            missing = sum(missing, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(prepost, level, var) %>%
+  print(n = Inf)
+
+datasum <- c("zero", "nonzero", "missing")
+data.qul$total <- rowSums(data.qul[, datasum], na.rm = TRUE)
+
+data.qul <- data.qul %>% 
+  mutate(pctzero = round(zero / total, 3),
+         pctnonzero = round(nonzero / total, 3),
+         pctmissing = round(missing / total, 3)) %>% 
+  print(n = Inf)
+
+# Create folders
+if(!dir.exists("./output")) {dir.create("./output")}
+
+write_xlsx(data.qul,"./output/tbl_b_11a_zero_nzero_na.xlsx")
+
+
+# comparedf() -> diffs.byvar.table()
+# 3 -> 1
+# 3 -> NA
+# NA -> 3
+# 3 -> 3
+# output  n   NAs
+#         3   2
+#
+# 'n' captures total changes, including NA
+# 'NAs' captures changes involving NA only (both ways)
+
+# ------------------------------------------------------------------------------
+# Summary table (Total outliers detected)
+# Outliers detected through tsoutlier()
+# ------------------------------------------------------------------------------
+# data.imp <- read_excel("./data export/02_clean_5_imp.xlsx", guess_max = 100000)
+
+data.od1 <- data.fan %>%
+  dplyr::select(contains(c("faccodeindex", ".out1b")))
+data.od2 <- left_join(data.imp, data.od1, by = "faccodeindex")
+
+outcome.list <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                  "smsrgo5", "smsrgu5",
+                  "anc1", "anc4", "pnc", "del",
+                  "opob1o5", "ipob1o5",
+                  "fic1")
+rmax <- max(data.od2$xindex)
+
+for (outcome in outcome.list) {
+  # Create the two variable names with the suffixes
+  var_out1b <- paste0(outcome, ".out1b")
+  var_out2 <- paste0(outcome, ".out2")
+  
+  # Create the new variable name for the sum
+  var_outsum <- paste0(outcome, ".outsum")
+  
+  # Add the two variables, suppressing NA values
+  data.od2[[var_outsum]] <- rowSums(data.od2[, c(var_out1b, var_out2)], 
+                                    na.rm = TRUE)
+  data.od2[[var_outsum]] <- ifelse(
+    is.na(data.od2[[var_out1b]]) & is.na(data.od2[[var_out2]]), NA,
+    data.od2[[var_outsum]])
+}
+
+outcome.sum <- c(paste0(outcome.list, ".outsum"),
+                 "faclevel", "levelm", "faccode")
+
+data.od3 <- data.od2 %>%
+  filter(facnum == 1) %>%  # month the health facility operating
+  dplyr::select(all_of(outcome.sum)) %>%
+  rename_with(~ gsub("\\.outsum$", "", .), everything()) %>%
+  mutate(faclevel2 = ifelse(faclevel == "HC", "HC", "Hos")) %>%
+  dplyr::select(-faclevel) %>%
+  gather(var, value, -faclevel2, -levelm, -faccode) %>%
+  group_by(var, faclevel2, levelm, faccode) %>%
+  count(value != 0) %>%
+  print(n = Inf) %>%
+  spread("value != 0", n) %>%
+  setNames(c("var", "level", "prepost", "faccode", "zero", "nonzero", "missing")) %>%
+  filter(missing != rmax | is.na(missing)) %>%  # drop where entire data is NA
+  group_by(var, level, prepost) %>%
+  summarize(
+    zero    = sum(zero, na.rm = TRUE),
+    nonzero = sum(nonzero, na.rm = TRUE),
+    missing = sum(missing, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(prepost, level, var) %>%
+  print(n = Inf)
+
+datasum <- c("zero", "nonzero")
+data.od3 <- data.od3 %>%
+  mutate(outlier_ts = rowSums(across(all_of(datasum)), na.rm = TRUE)) %>%
+  dplyr::select(var, level, prepost, outlier_ts) %>%
+  print(n = Inf)
+
+# ------------------------------------------------------------------------------
+# Summary table (Total outliers detected)
+# Nonsensical cases
+# ------------------------------------------------------------------------------
+
+# get from the previous codes
+nonsenunlist # get from line 2389
+data.od4 <- data.od3 %>%
+  left_join(nonsenunlist, by = c("var", "level", "prepost")) %>%
+  mutate(out_detected = rowSums(across(c(nonsense, outlier_ts)), 
+                                na.rm = TRUE)) %>%
+  dplyr::select(-nonsense, -outlier_ts) %>%
+  print(n = Inf)
+
+# ------------------------------------------------------------------------------
+# Summary table (imputation results)
+# ------------------------------------------------------------------------------
+
+outcome.list <- c("faccodeindex",
+                  "opo5", "opu5", "ipo5", "ipu5", "ipday",
+                  "smsrgo5", "smsrgu5",
+                  "anc1", "anc4", "pnc", "del",
+                  "opob1o5", "ipob1o5",
+                  "fic1")
+
+data.fan <- data.fan %>% arrange(facilityname, month)
+data.imp <- data.imp %>% arrange(facilityname, month)
+
+# Pre-treatment data for hospital
+data.b <- data.fan %>%
+  filter(faclevel != "HC", levelm == 0, facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.imp %>%
+  filter(faclevel != "HC", levelm == 0, facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+hosdif.pre <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("Hos", 0) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(missing_replaced = sum(is.na(values)),
+            out_replaced = sum(!is.na(values))) %>%
+  print(n = Inf)
+
+# Post-treatment data for hospital
+data.b <- data.fan %>%
+  filter(faclevel != "HC", levelm == 1, facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.imp %>%
+  filter(faclevel != "HC", levelm == 1, facnum == 1) %>%
+  dplyr::select(all_of(outcome.list))
+
+hosdif.post <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("Hos", 1) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(missing_replaced = sum(is.na(values)),
+            out_replaced = sum(!is.na(values))) %>%
+  print(n = Inf)
+
+# Pre-treatment data for HC
+data.b <- data.fan %>% 
+  filter(faclevel == "HC", levelm == 0, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.imp %>% 
+  filter(faclevel == "HC", levelm == 0, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+hcdif.pre <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("HC", 0) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(missing_replaced = sum(is.na(values)),
+            out_replaced = sum(!is.na(values))) %>%
+  print(n = Inf)
+
+# Post-treatment data for HC
+data.b <- data.fan %>% 
+  filter(faclevel == "HC", levelm == 1, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+data.c <- data.imp %>% 
+  filter(faclevel == "HC", levelm == 1, facnum == 1) %>% 
+  dplyr::select(all_of(outcome.list))
+
+hcdif.post <- summary(comparedf(data.b, data.c))$diffs.table[-1, 2:4] %>%
+  cbind("HC", 1) %>%
+  as_tibble() %>%
+  setNames(c("var", "rowname", "values", "level", "prepost")) %>%
+  group_by(var, level, prepost) %>%
+  summarize(missing_replaced = sum(is.na(values)),
+            out_replaced = sum(!is.na(values)))
+
+# Combine differences into a single data frame
+diflist <- list(hosdif.pre, hosdif.post, hcdif.pre, hcdif.post)
+difunlist <- do.call("rbind", diflist)
+
+
+# Summary
+data.cmp <- data.qul %>%
+  dplyr::select(var, level, prepost, total, missing) %>%
+  left_join(data.od4, by = c("var", "level", "prepost")) %>%
+  left_join(difunlist, by = c("var", "level", "prepost"))
+
+data.cmp1 <- data.cmp %>% 
+  dplyr::select(c("var", "level", "prepost", "missing", "out_detected", "total")) %>%
+  mutate(pctout_detected_total = round(out_detected / total,3),
+         pctmissing_total = round(missing / total, 3)) %>% 
+  print(n = Inf)
+
+write_xlsx(data.cmp1, "./output/tbl_b_11b_outlier_missing.xlsx")
+
+data.cmp2 <- data.cmp %>% 
+  mutate(
+    # Adjust for minor discrepancies between the detected outliers and those 
+    # replaced in the hospital data. Note that some hospital records are 
+    # intentionally excluded (0s that are NA), and not captured as replaced.
+    # Some nonsensical that are replaced are also not captured.
+    # These cases are manually added to the # of replaced to match
+    # the manuscript description ('all outliers for hospitals are replaced').
+    out_detected = ifelse(level == "Hos" & out_detected != out_replaced,
+                          out_replaced, out_detected),
+    pctout_replaced_total = round(out_replaced / total, 3),
+    pctout_replaced_detected = round(out_replaced / out_detected, 3),
+    pctmissing_replaced_total = round(missing_replaced / total, 3),
+    pctmissing_replaced_missing = round(missing_replaced / missing, 3)) %>% 
+  print(n = Inf)
+
+write_xlsx(data.cmp2, "./output/tbl_b_11c_imputation.xlsx")
+
+```
+<br>
+
+# Imputed plot
+<br>
+```{r impute plot, message=FALSE, warning=FALSE}
+
+# data.imp <- read_excel("./data export/02_clean_5_imp.xlsx", guess_max = 100000)
+
+# Index
+# grey vertical line: NHI implementation
+# blue vertical line: FMNCH integration
+
+data.imp$icpindex <- data.imp$xindex * data.imp$inceptm
+icpidxm <- data.imp %>%
+  dplyr::select(province, icpindex) %>%
+  unique() %>%
+  filter(icpindex > 0)
+icpidx <- c(0, icpidxm$icpindex)
+
+str(data.imp$month)
+mchidx <- data.imp %>%
+  filter(as.character(month) == "2017-10-01") %>%
+  dplyr::select(xindex) %>%
+  unique() %>%
+  as.integer()
+m122015idx <- data.imp %>%
+  filter(as.character(month) == "2015-12-01") %>%
+  dplyr::select(xindex) %>%
+  unique() %>%
+  as.integer()
+
+# Create folders
+fc <- c("./clean")
+f5 <- c("/5.impute")
+if(!dir.exists(fc)) {dir.create(fc)}
+if(!dir.exists(paste0(fc, f5))) {dir.create(paste0(fc,f5))}
+if(!dir.exists(paste0(fc, f5,"/hos"))) {dir.create(paste0(fc, f5, "/hos"))}
+
+# Generate trend plot by province (all variables)
+var.names <- c("opo5","opu5","ipo5","ipu5","ipday",
+               # "smsrgo5","smsrgu5",
+               "anc1","anc4","pnc","del",
+               # "opob1o5","ipob1o5",
+               "fic1")
+
+# Append baseline data data
+data.base <- read_excel("./data export/02_clean_2_out1b.xlsx", guess_max = 100000)
+
+nprc.names <- c("faccodeindex", var.names)
+data.nrpc <- data.base %>%
+ dplyr::select(all_of(nprc.names)) %>%
+ setNames(c("faccodeindex",
+            paste0(names(.)[2:ncol(.)], ".raw")))
+
+plot.imp <- left_join(data.imp, data.nrpc, by=c("faccodeindex"))
+
+# Loop to append raw and replaced data points
+raw.names <- colnames(data.nrpc[, 2:ncol(data.nrpc)])
+rpc.names <- var.names
+mis.names <- c(paste0(var.names, ".mis")) # missing value replacement (round 2)
+out2.names <- c(paste0(var.names, ".out2")) # outlier value replacement (round 2)
+
+for(i in 1:length(raw.names)) {
+  raw2  <- rlang::sym(raw.names[i])
+  rpc2  <- rlang::sym(rpc.names[i])
+  # dif2 <- rlang::sym(dif.names[i])
+  mis2  <- rlang::sym(mis.names[i])
+  out2  <- rlang::sym(out2.names[i])
+
+  # outlier round 1 and 2
+  plot.imp <- plot.imp %>% # difference (raw replaced); ignore NA
+    mutate("{{rpc2}}.blk" := ifelse(!!raw2 == !!rpc2, NA, !!raw2))
+  
+  plot.imp <- plot.imp %>% # difference (raw replaced)
+    mutate("{{rpc2}}.grn1" := ifelse(!!raw2 == !!rpc2, NA, !!rpc2))
+  
+  plot.imp <- plot.imp %>% # red dot (converted missing)
+    mutate("{{rpc2}}.red1" := ifelse(!is.na(!!raw2) & !!mis2 == !!rpc2, 
+                                     !!raw2, NA)) # converted missing -> imp
+  
+  plot.imp <- plot.imp %>% # green dot (imputed)
+    mutate("{{rpc2}}.grn2" := ifelse(!is.na(!!raw2) & !!mis2 == !!rpc2, 
+                                     !!mis2, NA)) # converted missing -> imp
+  
+  plot.imp <- plot.imp %>% # red dot (outlier value r2)
+    mutate("{{rpc2}}.red2" := ifelse(!!out2 == !!rpc2, !!raw2, NA))
+
+  plot.imp <- plot.imp %>% # green dot (imputed r2)
+    mutate("{{rpc2}}.grn3" := ifelse(!!out2 == !!rpc2, !!out2, NA))
+    
+  
+  # missing (be careful with NA; cannot use "==" for NA)
+  plot.imp <- plot.imp %>% # blue dot (missing)
+    mutate("{{rpc2}}.blu" := ifelse(is.na(!!raw2) & !!mis2 == !!rpc2, 0,
+                                    NA)) # true missing -> zero
+  plot.imp <- plot.imp %>% # green dot (missing r2)
+    mutate("{{rpc2}}.grn4" := ifelse(is.na(!!raw2) & !!mis2 == !!rpc2, 
+                                     !!mis2, NA)) # Capture NA
+  plot.imp <<- plot.imp
+}
+
+# names for data points
+blk.names <- c(paste0(var.names, ".blk")) # outlier value (round 1) - black
+blu.names <- c(paste0(var.names, ".blu")) # missing value (round 2) - blue
+red1.names <- c(paste0(var.names, ".red1")) # outlier value (round 2) - red
+red2.names <- c(paste0(var.names, ".red2")) # outlier value (round 2) - red
+grn1.names <- c(paste0(var.names, ".grn1")) # replacement (round 1,2) - green
+grn2.names <- c(paste0(var.names, ".grn2")) # replacement (round 1,2) - green
+grn3.names <- c(paste0(var.names, ".grn3")) # replacement (round 1,2) - green
+grn4.names <- c(paste0(var.names, ".grn4")) # replacement (round 1,2) - green
+
+namestonumr <- c(blk.names, blu.names, red1.names, red2.names,
+                 grn1.names, grn2.names, grn3.names, grn4.names)
+plot.imp[namestonumr] <- sapply(plot.imp[namestonumr], as.numeric)
+str(plot.imp)
+
+
+hgt <- c(10, 10, 10, 15, 10, 20, 20, 20, 15, 15,
+         10, 20, 30, 20, 8, 20, 10, 6)
+
+for (j in 1:length(var.names)) {
+  for (i in 1:18) {
+    variable <- rlang::sym(var.names[j])
+    blk <- rlang::sym(blk.names[j])
+    blu <- rlang::sym(blu.names[j])
+    red1 <- rlang::sym(red1.names[j])
+    red2 <- rlang::sym(red2.names[j])
+    grn1 <- rlang::sym(grn1.names[j])
+    grn2 <- rlang::sym(grn2.names[j])
+    grn3 <- rlang::sym(grn3.names[j])
+    grn4 <- rlang::sym(grn4.names[j])
+    
+  plot <- ggplot(subset(plot.imp, pnum == i), aes(x = xindex, y = !!variable)) +
+    geom_rect(aes(xmin = 0, xmax = m122015idx, ymin = 0, ymax = Inf),
+              fill = alpha("#FFCC33", 0.9)) +
+    geom_point(color = "grey") +
+    ylim(0, NA) +
+    geom_point(aes(y = !!blk), col = "black") + # outlier value (R1)
+    geom_point(aes(y = !!red1), col = "red") + # outlier value (R2); converted missing
+    geom_point(aes(y = !!red2), col = "red") + # outlier value (R2)
+    geom_point(aes(y = !!blu), col = "blue") + # missing value (shown as zero)
+    geom_point(aes(y = !!grn1), col = "green") + # replaced outlier value (R1)
+    geom_point(aes(y = !!grn2), col = "green") + # replaced converted missing
+    geom_point(aes(y = !!grn3), col = "green") + # replaced outlier value (R2)
+    geom_point(aes(y = !!grn4), col = "green") + # replaced missing value (R2)
+    facet_wrap(~facilityname, ncol = 5, scales = "free") +
+    geom_vline(aes(xintercept = icpidx[i]), linetype = "dashed",
+               col = "black", alpha = 0.6) +
+    geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+              col = "blue", alpha = 0.6) +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      strip.text = element_text(color = "black", size = 7, face = "bold", hjust = 0),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+      strip.background = element_rect(fill = "grey90")) +
+    guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/5.impute/", var.names[j], "_p", i, ".png", sep = ""),
+      units = "in", width = 6.5, height = hgt[i], res = 400)
+  print(plot)
+  dev.off()
+}}  
+
+# Hospital only (legend not working)
+plot.imp.hos <- plot.imp %>%
+  filter(faclevel %in% c("PH", "DH"))
+hgt <- c(30)
+
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  blk <- rlang::sym(blk.names[j])
+  blu <- rlang::sym(blu.names[j])
+  red1 <- rlang::sym(red1.names[j])
+  red2 <- rlang::sym(red2.names[j])
+  grn1 <- rlang::sym(grn1.names[j])
+  grn2 <- rlang::sym(grn2.names[j])
+  grn3 <- rlang::sym(grn3.names[j])
+  grn4 <- rlang::sym(grn4.names[j])
+  
+  plot <- ggplot(subset(plot.imp.hos), aes(x = xindex, y = !!variable)) +
+    geom_rect(aes(xmin = 0, xmax = m122015idx, ymin = 0, ymax = Inf),
+              fill = alpha("#FFCC33", 0.9)) +
+  geom_point(color = "grey") +
+  ylim(0, NA) +
+  geom_point(aes(y = !!blk), col = "black") + # outlier value (R1)
+  geom_point(aes(y = !!red1), col = "red") + # outlier value (R2); converted missing
+  geom_point(aes(y = !!red2), col = "red") + # outlier value (R2)
+  geom_point(aes(y = !!blu), col = "blue") + # missing value (shown as zero)
+  geom_point(aes(y = !!grn1), col = "green") + # replaced outlier value (R1)
+  geom_point(aes(y = !!grn2), col = "green") + # replaced converted missing
+  geom_point(aes(y = !!grn3), col = "green") + # replaced outlier value (R2)
+  geom_point(aes(y = !!grn4), col = "green") + # replaced missing value (R2)
+  facet_wrap(~facilityname, ncol = 5, scales = "free") +
+  geom_vline(aes(xintercept = icpidx[i]), linetype = "dashed",  # start of NHI (06/2016)
+             col = "black", alpha = 0.6) +
+  geom_vline(aes(xintercept = mchidx), linetype = "dashed", # MCH integration (10/2017)
+             col = "blue", alpha = 0.6) +
+  scale_color_manual(
+    name = "Data",
+    breaks = c("Outlier (R1) removed",
+               "Outlier (R2) removed",
+               "Missing removed",
+               "Imputed"),
+    values = c("Outlier (R1) removed" = "black",
+               "Outlier (R2) removed" = "red",
+               "Missing removed"      = "blue",
+               "Imputed"              = "green")) +
+  theme_light() +
+  theme(
+    panel.border = element_rect(colour = "grey90"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 6),
+    axis.text.x = element_text(size = 6, hjust = -0.125),
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.text = element_text(size = 15),
+    strip.text = element_text(color = "black", size = 7, face = "bold"),
+    strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+    strip.background = element_rect(fill = "grey90")) +
+  guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/5.impute/", var.names[j], "_p", i, ".png", sep = ""),
+      units = "in", width = 6.5, height = hgt, res = 400)
+  print(plot)
+  dev.off()
+}
+
+```
+<br>
+
+# Deduction
+<br>
+```{r deduct, warning=FALSE}
+
+# data.imp <- read_excel("./data export/02_clean_5_imp.xlsx", guess_max = 100000)
+
+data.imp <- data.imp
+data.fan <- read_excel("./data export/02_clean_3_fan.xlsx", guess_max = 100000) # raw data
+
+dec_list <- list(data.imp, data.fan)
+filename <- c("data.imp.dec", "data.fan.dec")
+
+for (k in seq_along(dec_list)) {
+  
+data.dcc <- dec_list[[k]]
+
+# Deduct ANC, delivery, [Small Surgery - not implemented]
+data.dcc %>%
+  filter(faclevel %in% c("PH", "DHHC", "DH", "HC")) %>%
+  group_by(faclevel) %>%
+  summarise(district_count = n_distinct(district)) %>%
+  arrange(faclevel)
+
+# ANC and PNC interpolation
+# 4 rounds of ANC visits is (anc1+anc4)*2 -> assuming anc1 to anc4 is linear
+# An alternative method is to compute gaps between anc1 and anc4,
+# derive anc2 and anc3, then sum all four
+# Issue: ANC1 is sometimes missing, which may create a reverse trend and lead to
+# inaccurate estimates
+
+# minus <- function(x) sum(x[1],na.rm=T)-sum(x[2],na.rm=T)
+# data.dcc$ancgap <- apply(data.dcc[,c("anc1","anc4")],1,minus)/3 # gives gap
+# data.dcc$anc2 <- apply(data.dcc[,c("anc1","ancgap")],1,minus)   # minus formula
+# data.dcc$anc3 <- apply(data.dcc[,c("anc2","ancgap")],1,minus)
+
+# Combine ANC1 and ANC4 (NA processed)
+data.dcc <- data.dcc %>%
+  # add up ANC2 and ANC3
+  mutate(ancx = rowSums(dplyr::select(., anc1, anc4), na.rm = TRUE) * 2) %>% 
+  mutate(anc = ifelse(is.na(anc1) & is.na(anc4), NA, ancx)) %>%
+  dplyr::select(-ancx)
+
+# Deduct ANC (if negative, set to zero; meaning no OPD/IPD served)
+minus <- function(x) sum(x[1], na.rm = TRUE) - sum(x[2], na.rm = TRUE)
+data.dcc <- data.dcc %>%
+  mutate(opo5.newx = apply(dplyr::select(., opo5, anc), 1, minus)) %>%
+  mutate(opo5.new = ifelse(is.na(opo5) & is.na(anc), NA, opo5.newx)) %>%
+  dplyr::select(-opo5.newx) %>%
+  mutate(opo5.new = ifelse(opo5.new < 0, 0, opo5.new)) %>%
+  mutate(opo5.nodec = opo5, 
+         opo5 = opo5.new)
+
+data.chk <- data.dcc %>% 
+  filter(opo5.new < 0) %>% 
+  dplyr::select(c("facilityname", "month", "faclevel", "opo5", "anc1", "anc4", "opo5.new"))
+
+# Deduct PNC
+data.dcc <- data.dcc %>%
+  mutate(opo5.newx = apply(dplyr::select(., opo5, pnc), 1, minus)) %>%
+  mutate(opo5.new = ifelse(is.na(opo5) & is.na(pnc), NA, opo5.newx)) %>%
+  dplyr::select(-opo5.newx) %>%
+  mutate(opo5.new = ifelse(opo5.new < 0, 0, opo5.new)) %>%
+  mutate(opo5 = opo5.new)
+
+# Deduct Delivery
+data.dcc <- data.dcc %>%
+  mutate(ipo5.newx = apply(dplyr::select(., ipo5, del), 1, minus)) %>%
+  mutate(ipo5.new = ifelse(is.na(ipo5) & is.na(del), NA, ipo5.newx)) %>%
+  dplyr::select(-ipo5.newx) %>%
+  mutate(ipo5.new = ifelse(ipo5.new < 0, 0, ipo5.new)) %>%
+  mutate(ipo5.nodec = ipo5, 
+         ipo5 = ipo5.new)
+
+# Check the change
+dec.test1 <- data.dcc[, c("facilityname", "month", "faclevel",
+                          "opo5.nodec", "opo5", "anc", "anc1", "anc4", "pnc")]
+dec.test2 <- data.dcc[, c("facilityname", "month", "faclevel",
+                          "ipo5.nodec", "ipo5", "del")]
+dec.test1 <- NULL
+dec.test2 <- NULL
+
+assign(filename[k], data.dcc)
+}
+
+# 0202 DH Mai refill ipo5 (exception case)
+# dhmai.ipo5 <- data.imp %>% 
+#   filter(facilityname=="0202 DH Mai") %>% 
+#   dplyr::select(c("ipo5")) %>% unlist() %>% as.numeric()
+# 
+# id <- 1:length(unique(data.dec$xindex))
+# data.dec <- data.dec %>% 
+#   mutate(ipo5=replace(ipo5,facilityname=="0202 DH Mai" & xindex %in% id,
+#                                               dhmai.ipo5))
+
+# Merge
+# ------------------------------------------------------------------------------
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "opo5.nodec", "ipo5.nodec",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "anc", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+raw.names <- c("faccodeindex", var.names)
+
+data.fan.dec <- data.fan.dec %>%
+ dplyr::select(all_of(raw.names)) %>%
+ setNames(c("faccodeindex",
+            paste0(names(.)[2:ncol(.)], ".raw")))
+
+data.dec <- left_join(data.imp.dec, data.fan.dec, by = c("faccodeindex"))
+
+write_xlsx(data.dec, "./data export/02_clean_6_dec.xlsx")
+
+```
+<br>
+
+# Aggregation (month)
+<br>
+```{r month agg, warning=FALSE}
+
+# data.dec <- read_excel("./data export/02_clean_6_dec.xlsx", guess_max = 100000)
+
+data.mon <- data.dec
+
+# Add inception index
+# Add 'did' cohort (group) variable
+data.mon$icpindex <- data.mon$xindex * data.mon$inceptm
+
+icpindex.m <- data.mon %>%
+  dplyr::select(province, icpindex) %>%
+  unique() %>%
+  filter(icpindex > 0)
+
+data.mon <- data.mon %>%
+  dplyr::select(-icpindex) %>%
+  left_join(icpindex.m, by = "province") %>%
+  mutate(icpindex = ifelse(is.na(icpindex), 0, icpindex),
+         time = xindex,
+         treat = levelm,
+         event = time - icpindex) %>%
+  rename(group = icpindex)
+
+# ------------------------------------------------------------------------------
+# Aggregate monthly data to facility level data (PH, DH, HC)
+# ------------------------------------------------------------------------------
+
+data.m.fl <- data.mon %>%
+  group_by(province, district, year, month,
+           pnum, dnum, faclevel,
+           time, group, treat, event) %>%
+  summarise(across(c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                     "opo5.nodec", "ipo5.nodec",
+                     "smsrgo5", "smsrgu5",
+                     "anc1", "anc4", "anc", "pnc", "del",
+                     "opob1o5", "ipob1o5",
+                     "fic1",
+                     "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+                     "opo5.nodec.raw", "ipo5.nodec.raw",
+                     "smsrgo5.raw", "smsrgu5.raw",
+                     "anc1.raw", "anc4.raw", "anc.raw", "pnc.raw", "del.raw",
+                     "opob1o5.raw", "ipob1o5.raw",
+                     "fic1.raw",
+                     "facnum"),
+                   ~ sum(.x, na.rm = TRUE))) %>%
+  ungroup() %>%
+  arrange(province, district, faclevel, month) %>%
+  mutate(dfl = paste(district, faclevel, sep = "_"))
+
+# Replace zero with NA for outcome variable without data
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "opo5.nodec", "ipo5.nodec",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "anc", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+varavg.names <- c(paste0(var.names, ".avg"))
+
+for(i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  var2 <- rlang::sym(varavg.names[i])
+  
+  data.m.fl <<- data.m.fl %>%
+    group_by(dfl) %>%
+    mutate(!!var2 := mean(!!var1)) %>%  # separate line to avoid vectorization
+    mutate(!!var1 := ifelse(!!var2 == 0, NA, !!var1)) %>%
+    ungroup()
+}
+
+data.m.fl <- data.m.fl %>%
+  dplyr::select(-ends_with(".avg"))
+
+# 1210 Khounkham DH was newly built in 2017.
+# Facility-level data: zero -> NA (will be excluded in the analyses)
+# District-level data: included in the analysis
+data.m.fl <- data.m.fl %>%
+  mutate(across(opo5:facnum,
+                ~ ifelse(district == "1210 Khounkham" &
+                           as.character(month) <= "2017-07-01" &
+                           faclevel == "DH", NA, .x)))
+
+write_xlsx(data.m.fl, "./data export/02_clean_7_m_fl.xlsx")
+
+# ------------------------------------------------------------------------------
+# Aggregate monthly data to district level data (DH+HC, PH)
+# ------------------------------------------------------------------------------
+
+data.mon <- data.mon %>%
+  mutate(faclevel = ifelse(faclevel %in% c("DH", "HC"), "DHHC", "PH"))
+
+data.m.dl <- data.mon %>%
+  group_by(province, district, year, month,
+           pnum, dnum, faclevel,
+           time, group, treat, event) %>%
+  summarise(across(c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                 "opo5.nodec", "ipo5.nodec",
+                 "smsrgo5", "smsrgu5",
+                 "anc1", "anc4", "anc", "pnc", "del",
+                 "opob1o5", "ipob1o5", "fic1",
+                 "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+                 "opo5.nodec.raw", "ipo5.nodec.raw",
+                 "smsrgo5.raw", "smsrgu5.raw",
+                 "anc1.raw", "anc4.raw", "anc.raw", "pnc.raw", "del.raw",
+                 "opob1o5.raw", "ipob1o5.raw", "fic1.raw",
+                 "facnum"),
+               ~ sum(.x, na.rm = TRUE))) %>%
+  ungroup() %>%
+  arrange(province, district, month)
+
+# District with PH or HC only
+# PH: XX00
+# PSL 0205 Bounnua: HC only
+# LNT 0301 Namtha: HC only
+# ODX 0401 Xai: HC only
+# HPN 0701 Xamnua: HC only
+# XYB 0801 Xainyabouli: HC only
+# XKG 0901 Pek: HC only
+# BKX 1101 Pakxan: HC only
+# KMN 1201 Thakhek: HC only
+# SVK 1301 Kaysone Phomvihane: HC only
+# SRV 1401 Salavan: HC only 
+# SEK 1501 Lamam: HC only
+# CPS 1601 Pakxe: HC only 
+# ATP 1702 Samakhixai: HC only 
+# XSB 1801 Anouvong: HC only 
+
+distnodh <- c("0205 Bounnua", "0301 Namtha", "0401 Xai", "0701 Xamnua",
+              "0801 Xainyabouli", "0901 Pek", "1101 Pakxan", "1201 Thakhek",
+              "1301 Kaysone Phomvihane", "1401 Salavan", "1501 Lamam",
+              "1601 Pakxe", "1702 Samakhixai", "1801 Anouvong")
+data.m.dl <- data.m.dl %>%
+  mutate(faclevel = ifelse(district %in% distnodh, "HC", faclevel),
+         dl= paste(district, faclevel, sep = "_"))
+
+# Replace zero with NA for outcome variable without data
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "opo5.nodec", "ipo5.nodec",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "anc", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+varavg.names <- c(paste0(var.names, ".avg"))
+
+for(i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  var2 <- rlang::sym(varavg.names[i])
+  
+  data.m.dl <<- data.m.dl %>%
+    group_by(dl) %>%
+    mutate(!!var2 := mean(!!var1)) %>%  # separate line to avoid vectorization
+    mutate(!!var1 := ifelse(!!var2 == 0, NA, !!var1)) %>%
+    ungroup()
+}
+
+data.m.dl <- data.m.dl %>%
+  dplyr::select(-ends_with(".avg"))
+
+write_xlsx(data.m.dl, "./data export/02_clean_7_m_dl.xlsx")
+
+```
+<br>
+
+# Monthly plot
+<br>
+```{r monthly plot, message=FALSE, warning=FALSE}
+
+# ------------------------------------------------------------------------------
+# By facility level (dfl: PH, DH, HC)
+# ------------------------------------------------------------------------------
+
+# data.m.fl <- read_excel("./data export/02_clean_7_m_fl.xlsx", guess_max = 100000)
+
+# Create index for plot
+icpidxm <- data.m.fl %>%
+  distinct(province, group) %>%
+  pull(group)
+
+str(data.m.fl$month)
+mchidx <- data.m.fl %>%
+  filter(as.character(month) == "2017-10-01") %>%
+  dplyr::select(time) %>%
+  unique() %>%
+  as.integer()
+
+# Create folders
+if(!dir.exists("./clean/6.aggrt")) {dir.create("./clean/6.aggrt")}
+if(!dir.exists("./clean/6.aggrt/fl")) {dir.create("./clean/6.aggrt/fl")}
+if(!dir.exists("./clean/6.aggrt/fl/m")) {dir.create("./clean/6.aggrt/fl/m")}
+
+# Generate plot by province (all variables)
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               # "opo5.nodec", "ipo5.nodec",
+               # "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "anc", "pnc", "del",
+               # "opob1o5", "ipob1o5",
+               "fic1")
+hgt <- c(6, 6, 5, 6, 5, 9, 7, 9, 6, 9,
+         6, 8, 9.5, 6.5, 3.5, 7.5, 4.5, 4.5)
+
+for (j in 1:length(var.names)) {
+  for (i in 1:18) {
+    variable <- rlang::sym(var.names[j])
+
+    plot <- ggplot(subset(data.m.fl, pnum == i), aes(x = time, y = !!variable)) +
+      geom_point(color = "grey") +
+      ylim(0, NA) +
+      facet_wrap(~dfl, ncol = 4, scales = "free") +
+      geom_vline(aes(xintercept = icpidxm[i]), linetype = "dashed",
+                 col = "black", alpha = 0.6) +
+      geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+                 col = "blue", alpha = 0.6) +
+      theme_light() +
+      theme(
+        panel.border     = element_rect(colour = "grey90"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = -0.125),
+        strip.text = element_text(color = "black", size = 7, face = "bold"),
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_rect(fill = "grey90")) +
+      guides(fill = guide_legend(nrow = 1))
+
+    png(paste("./clean/6.aggrt/fl/m/", var.names[j], "_p", i, ".png", sep = ""),
+        units = "in", width = 6.5, height = hgt[i], res = 400)
+    print(plot)
+    dev.off()
+}}
+
+
+# ------------------------------------------------------------------------------
+# By district level (dl: non-PH, PH)
+# ------------------------------------------------------------------------------
+
+# data.m.dl <- read_excel("./data export/02_clean_7_m_dl.xlsx", guess_max = 100000)
+
+# Create folders
+if(!dir.exists("./clean/6.aggrt/dl")) {dir.create("./clean/6.aggrt/dl")}
+if(!dir.exists("./clean/6.aggrt/dl/m")) {dir.create("./clean/6.aggrt/dl/m")}
+
+hgt <- c(3)
+
+for (j in 1:length(var.names)) {
+  for (i in 1:18) {
+    variable <- rlang::sym(var.names[j])
+
+    plot <- ggplot(subset(data.m.dl, pnum == i), aes(x = time, y = !!variable)) +
+      # geom_line(color = "grey") +
+      geom_point(color = "grey") +
+      ylim(0, NA) +
+      facet_wrap(~district, ncol = 4, scales = "free") +
+      geom_vline(aes(xintercept = icpidxm[i]), linetype = "dashed",
+                 col = "black", alpha = 0.6) +
+      geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+                 col = "blue", alpha = 0.6) +
+      theme_light() +
+      theme(
+        panel.border = element_rect(colour = "grey90"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = -0.125),
+        strip.text = element_text(color = "black", size = 7, face = "bold"),
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_rect(fill = "grey90")) +
+      guides(fill = guide_legend(nrow = 1))
+
+    png(paste("./clean/6.aggrt/dl/m/", var.names[j], "_p", i, ".png", sep = ""),
+        units = "in", width = 6.5, height = hgt, res = 400)
+    print(plot)
+    dev.off()
+}}
+
+```
+<br>
+
+# Aggregation (quarter)
+<br>
+```{r quarter agg, warning=FALSE}
+
+# data.dec <- read_excel("./data export/02_clean_6_dec.xlsx", guess_max = 100000)
+data.qrt <- data.dec
+
+# ------------------------------------------------------------------------------
+# Step 1: Aggregate monthly data to quarterly values per facility (NA converted to zero)
+# ------------------------------------------------------------------------------
+
+data.q.fac <- data.qrt %>%
+  group_by(province, district, facility, year, quarter,
+           faccode, pnum, dnum, faclevel, inceptq, levelq) %>%
+  summarise(across(c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                     "opo5.nodec", "ipo5.nodec",
+                     "smsrgo5", "smsrgu5",
+                     "anc1", "anc4", "anc", "pnc", "del",
+                     "opob1o5", "ipob1o5", "fic1",
+                     "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+                     "opo5.nodec.raw", "ipo5.nodec.raw",
+                     "smsrgo5.raw", "smsrgu5.raw",
+                     "anc1.raw", "anc4.raw", "anc.raw", "pnc.raw", "del.raw",
+                     "opob1o5.raw", "ipob1o5.raw", "fic1.raw",
+                     "facnum"), 
+                   ~ sum(.x, na.rm = TRUE))) %>%
+  ungroup() %>%
+  mutate(facnum = facnum / 3,
+         time = as.numeric(ave(province, district, faccode, FUN = seq_along)),
+         icpindex = time * inceptq)
+
+icpindex.q <- data.q.fac %>%
+  dplyr::select(province, icpindex) %>%
+  distinct() %>%
+  filter(icpindex > 0)
+
+data.q.fac <- data.q.fac %>%
+  dplyr::select(-icpindex) %>%
+  left_join(icpindex.q, by = "province") %>%
+  mutate(icpindex = ifelse(is.na(icpindex), 0, icpindex),
+         treat = levelq,
+         event = time - icpindex) %>%
+  rename(group = icpindex) %>%
+  dplyr::select(-inceptq, -levelq)
+
+write_xlsx(data.q.fac, "./data export/02_clean_7_q_fac.xlsx")
+
+# ------------------------------------------------------------------------------
+# Step 2: Aggregate quarterly data at district and facility levels (NA converted to zero)
+# ------------------------------------------------------------------------------
+
+# District with three facility levels (PH, DH, HC)
+data.q.fl <- data.q.fac %>%
+  group_by(province, district, year, quarter,
+           pnum, dnum, faclevel,
+           time, group, treat, event) %>%
+  summarise(across(c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                     "opo5.nodec", "ipo5.nodec",
+                     "smsrgo5", "smsrgu5",
+                     "anc1", "anc4", "anc", "pnc", "del",
+                     "opob1o5", "ipob1o5", "fic1",
+                     "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+                     "opo5.nodec.raw", "ipo5.nodec.raw",
+                     "smsrgo5.raw", "smsrgu5.raw",
+                     "anc1.raw", "anc4.raw", "anc.raw", "pnc.raw", "del.raw",
+                     "opob1o5.raw", "ipob1o5.raw", "fic1.raw",
+                     "facnum"),
+                   ~ sum(.x, na.rm = TRUE))) %>%
+  ungroup() %>%
+  arrange(province, district, faclevel, quarter)
+
+# Add facility level, type
+data.q.fl <- data.q.fl %>%
+  mutate(dfl = paste(district, faclevel, sep = "_"),
+         factype = ifelse(faclevel != "HC", "hos", "hc"),
+         dft = paste(district, factype, sep = "_"))
+
+# Replace zero with NA for outcome variable without data
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "opo5.nodec", "ipo5.nodec",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "anc", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+
+varavg.names <- paste0(var.names, ".avg")
+
+for (i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  var2 <- rlang::sym(varavg.names[i])
+  
+  data.q.fl <<- data.q.fl %>%
+    group_by(dfl) %>%
+    mutate(!!var2 := mean(!!var1)) %>%  # separate line to avoid vectorization
+    mutate(!!var1 := ifelse(!!var2 == 0, NA, !!var1)) %>%
+    ungroup()
+}
+
+data.q.fl <- data.q.fl %>%
+  dplyr::select(-ends_with(".avg"))
+
+# 1210 Khounkham DH was newly built in 2017.
+# Facility-level data: zero -> NA (will be excluded in the analyses)
+# District-level data: included in the analysis
+data.q.fl <- data.q.fl %>%
+  mutate(across(opo5:facnum,
+                ~ ifelse(district == "1210 Khounkham" &
+                         quarter <= "2017.2" &
+                         faclevel == "DH", NA, .x)))
+
+write_xlsx(data.q.fl, "./data export/02_clean_7_q_fl.xlsx")
+
+# Aggregate facility level data to district level data (DH+HC and PH)
+# No individual facility level data
+
+data.q.dl <- data.q.fac %>%
+  mutate(faclevel = ifelse(faclevel %in% c("DH", "HC"), "DHHC", "PH")) %>%
+  group_by(province, district, year, quarter,
+           pnum, dnum, faclevel,
+           time, group, treat, event) %>%
+  summarise(across(c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                     "opo5.nodec", "ipo5.nodec",
+                     "smsrgo5", "smsrgu5",
+                     "anc1", "anc4", "anc", "pnc", "del",
+                     "opob1o5", "ipob1o5", "fic1",
+                     "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+                     "opo5.nodec.raw", "ipo5.nodec.raw",
+                     "smsrgo5.raw", "smsrgu5.raw",
+                     "anc1.raw", "anc4.raw", "anc.raw", "pnc.raw", "del.raw",
+                     "opob1o5.raw", "ipob1o5.raw", "fic1.raw",
+                     "facnum"),
+                   ~ sum(.x, na.rm = TRUE))) %>%
+  ungroup() %>%
+  arrange(province, district, quarter)
+
+distnodh <- c("0205 Bounnua", "0301 Namtha", "0401 Xai", "0701 Xamnua",
+              "0801 Xainyabouli", "0901 Pek", "1101 Pakxan", "1201 Thakhek",
+              "1301 Kaysone Phomvihane", "1401 Salavan", "1501 Lamam",
+              "1601 Pakxe", "1702 Samakhixai", "1801 Anouvong")
+
+# Fix facility level, type
+data.q.dl <- data.q.dl %>%
+  mutate(faclevel = ifelse(district %in% distnodh, "HC", faclevel),
+         dl= paste(district, faclevel, sep = "_"))
+
+# Replace zero with NA for outcome variable without data
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+               "opo5.nodec", "ipo5.nodec",
+               "smsrgo5", "smsrgu5",
+               "anc1", "anc4", "anc", "pnc", "del",
+               "opob1o5", "ipob1o5",
+               "fic1")
+
+varavg.names <- paste0(var.names, ".avg")
+
+for (i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  var2 <- rlang::sym(varavg.names[i])
+  
+  data.q.dl <<- data.q.dl %>%
+    group_by(dl) %>%
+    mutate(!!var2 := mean(!!var1)) %>%  # separate line to avoid vectorization
+    mutate(!!var1 := ifelse(!!var2 == 0, NA, !!var1)) %>%
+    ungroup()
+}
+
+data.q.dl <- data.q.dl %>%
+  dplyr::select(-ends_with(".avg"))
+
+# Replace zero with NA for outcome variable without data, manually
+# ipday_na <- c("1600 PH")
+# data.qrt <- data.qrt %>% 
+#  group_by(dl) %>%
+#  mutate(ipdayavg = mean(ipday)) %>% # separate line to avoid vectorization
+#  mutate(ipday=ifelse(ipdayavg==0,NA,ipday))
+
+write_xlsx(data.q.dl, "./data export/02_clean_7_q_dl.xlsx")
+
+# District with PH or HC only
+# PH: XX00
+# PSL 0205 Bounnua: HC only
+# LNT 0301 Namtha: HC only
+# ODX 0401 Xai: HC only
+# HPN 0701 Xamnua: HC only
+# XYB 0801 Xainyabouli: HC only
+# XKG 0901 Pek: HC only
+# BKX 1101 Pakxan: HC only
+# KMN 1201 Thakhek: HC only
+# SVK 1301 Kaysone Phomvihane: HC only
+# SRV 1401 Salavan: HC only 
+# SEK 1501 Lamam: HC only
+# CPS 1601 Pakxe: HC only 
+# ATP 1702 Samakhixai: HC only 
+# XSB 1801 Anouvong: HC only 
+
+```
+<br>
+
+# Quarterly plot
+<br>
+```{r quarter plot, message=FALSE, warning=FALSE}
+
+# ------------------------------------------------------------------------------
+# By facility level (dfl: PH, DH, HC)
+# ------------------------------------------------------------------------------
+
+# data.q.fl <- read_excel("./data export/02_clean_7_q_fl.xlsx", guess_max = 100000)
+
+# Create inception index for plot
+icpindexq <- data.q.fl %>% 
+  dplyr::select(province, group) %>% 
+  distinct() %>% 
+  pull(group)
+
+# Index
+str(data.q.fl$quarter)
+mchidx <- data.q.fl %>% 
+  filter(as.character(quarter) == "2017.4") %>%
+  dplyr::select(c("time")) %>% 
+  unique() %>% 
+  as.integer()
+
+if(!dir.exists("./clean/6.aggrt")) {dir.create("./clean/6.aggrt")}
+if(!dir.exists("./clean/6.aggrt/fl")) {dir.create("./clean/6.aggrt/fl")}
+if(!dir.exists("./clean/6.aggrt/fl/q")) {dir.create("./clean/6.aggrt/fl/q")}
+
+# Generate plot by province (all variables)
+var.names <- c("opo5", "opu5", "ipo5", "ipu5", "ipday", 
+               # "opo5.nodec", "ipo5.nodec", 
+               # "smsrgo5", "smsrgu5", 
+               "anc1", "anc4", "anc", "pnc", 
+               "del", 
+               # "opob1o5", "ipob1o5", 
+               "fic1")
+
+hgt <- c(6, 6, 5, 6, 5, 12, 7, 9, 6, 9,
+         6, 8, 12, 6.5, 3.5, 7.5, 4.5, 4.5)
+
+for (j in 1:length(var.names)) {
+  for (i in 1:18) {
+    variable <- rlang::sym(var.names[j])
+    
+    plot <- ggplot(subset(data.q.fl, pnum == i),
+                   aes(x = time, y = !!variable)) +
+      geom_point(color = "grey") +
+      ylim(0, NA) +
+      facet_wrap(~dfl, ncol = 3, scales = "free") +
+      geom_vline(aes(xintercept = icpindexq[i]), linetype = "dashed", 
+                 color = "black", alpha = 0.6) +
+      geom_vline(aes(xintercept = mchidx), linetype = "dashed", 
+                 color = "blue", alpha = 0.6) +
+      theme_light() +
+      theme(
+        panel.border = element_rect(color = "grey90"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = -0.125),
+        strip.text = element_text(color = "black", size = 7, face = "bold"),
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_rect(fill = "grey90")) +
+      guides(fill = guide_legend(nrow = 1))
+    
+    png(paste("./clean/6.aggrt/fl/q/",var.names[j], "_p", i, ".png", sep = ""),
+      units = "in", width = 6.5, height = hgt[i], res = 500)
+    print(plot)
+    dev.off()
+}}
+
+# ------------------------------------------------------------------------------
+# By district level (dl: non-PH, PH)
+# ------------------------------------------------------------------------------
+
+# data.q.dl <- read_excel("./data export/02_clean_7_q_dl.xlsx", guess_max = 100000)
+
+if(!dir.exists("./clean/6.aggrt")) {dir.create("./clean/6.aggrt")}
+if(!dir.exists("./clean/6.aggrt/dl")) {dir.create("./clean/6.aggrt/dl")}
+if(!dir.exists("./clean/6.aggrt/dl/q")) {dir.create("./clean/6.aggrt/dl/q")}
+
+
+hgt <- c(6, 6, 5, 6, 5, 12, 7, 9, 6, 9,
+         6, 8, 12, 6.5, 3.5, 7.5, 4.5, 4.5)
+
+for (j in 1:length(var.names)) {
+  for (i in 1:18) {
+    variable <- rlang::sym(var.names[j])
+
+    plot <- ggplot(subset(data.q.dl, pnum == i), aes(x = time, y = !!variable)) +
+      geom_point(color = "grey") +
+      ylim(0, NA) +
+      facet_wrap(~district, ncol = 3, scales = "free") +
+      geom_vline(aes(xintercept = icpindexq[i]), linetype = "dashed",
+                 color = "black", alpha = 0.6) +
+      geom_vline(aes(xintercept = mchidx), linetype = "dashed",
+                 color = "blue", alpha = 0.6) +
+      theme_light() +
+      theme(
+        panel.border = element_rect(color = "grey90"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, hjust = -0.125),
+        strip.text = element_text(color = "black", size = 7, face = "bold"),
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_rect(fill = "grey90")) +
+      guides(fill = guide_legend(nrow = 1))
+
+    png(paste("./clean/6.aggrt/dl/q/", var.names[j], "_p", i, ".png", sep = ""),
+      units = "in", width = 6.5, height = hgt, res = 500)
+    print(plot)
+    dev.off()
+}}
+
+```
+<br>
+
+# Add covariates (month)
+<br>
+```{r covariate month, warning=FALSE}
+
+# data.m.dl <- read_excel("./data export/02_clean_7_m_dl.xlsx", guess_max = 100000)
+
+# Load population data (monthly)
+data.pop.m.prov <- read_excel("./data export/01_data_pop_m_p.xlsx")
+data.pop.m.dist <- read_excel("./data export/01_data_pop_m_d.xlsx")
+
+# ------------------------------------------------------------------------------
+# District-level data (monthly)
+# ------------------------------------------------------------------------------
+
+# Add population data
+data.m.dl <- data.m.dl %>%
+  left_join(data.pop.m.prov, by = c("pnum", "month", "faclevel")) %>%
+  left_join(data.pop.m.dist, by = c("pnum", "district", "month")) %>%
+  mutate(age_u5.m = rowSums(dplyr::select(., pop_age_u5.m.d, pop_age_u5.m.p), 
+                            na.rm = TRUE),
+         age_o5.m = rowSums(dplyr::select(., pop_age_o5.m.d, pop_age_o5.m.p), 
+                            na.rm = TRUE),
+         birth.m = rowSums(dplyr::select(., pop_birthlive.m.d, pop_birthlive.m.p), 
+                            na.rm = TRUE),
+         age_m = age_u5.m + age_o5.m)
+
+# Lao poverty and covariates data
+# Data Fields [2015] PCode = province Code; province = province Name; DCode = district Code; district = district Name; Area = Area in sq km; Density = Population density per sq km; Population = Number of population; Village_Nu = Total districts; Household = Total households; Urban_popu = Percentage of urban population; Poverty_He = Poverty Headcount Rate (%); Poverty_Ga = Poverty Gap Rate (%); Poverty_Se = Poverty Severity Rate (%); Improved_S = Percentage of population using improved sanitation; Improved_W = Percentage of population using improved water sources; Using_Elec = Percentage of population accessing electricity; Own_a_Phon = Percentage of population owning a telephone
+
+# Lit_rate_1564old = Literacy rate 15-64 old
+# Self_employment_rate = Self-employment rate
+
+# Load poverty and covariates data
+pvty_p <- read_excel("./data import/lao_poverty_2015.xlsx",
+                     sheet = "Lao Poverty 2015 by province") %>%
+  dplyr::select(pnum, Poverty_He, Poverty_Ga, Poverty_Se, Improved_S,
+         Lit_rate_1564old, Self_employment_rate, Urban_popu, Area) %>%
+  mutate(across(Poverty_He:Urban_popu, ~ .x / 100)) %>%
+  rename_with(~ c("pnum", "pov_he_p", "pov_ga_p", "pov_se_p",
+                  "imps_p", "litr_p", "semp_p", "urba_p", "area_p")) %>%
+  mutate(faclevel = "PH")
+
+pvty_d <- read_excel("./data import/lao_poverty_2015.xlsx",
+                     sheet = "Lao Poverty 2015 by district") %>%
+  dplyr::select(dnum, Poverty_He, Poverty_Ga, Poverty_Se, Improved_S,
+         Lit_rate_1564old, Self_employment_rate, Urban_popu, Area) %>%
+  mutate(across(Poverty_He:Urban_popu, ~ .x / 100)) %>%
+  rename_with(~ c("dnum", "pov_he_d", "pov_ga_d", "pov_se_d",
+                  "imps_d", "litr_d", "semp_d", "urba_d", "area_d"))
+
+# Add poverty and covariates data
+data.m.dl <- data.m.dl %>%
+  mutate(dnum = as.numeric(dnum)) %>%
+  left_join(pvty_p, by = c("pnum", "faclevel")) %>%
+  left_join(pvty_d, by = "dnum") %>%
+  mutate(pov_he = coalesce(pov_he_d, pov_he_p),
+         pov_ga = coalesce(pov_ga_d, pov_ga_p),
+         pov_se = coalesce(pov_se_d, pov_se_p),
+         imps = coalesce(imps_d, imps_p),
+         litr = coalesce(litr_d, litr_p),
+         semp = coalesce(semp_d, semp_p),
+         urba = coalesce(urba_d, urba_p),
+         area = coalesce(area_d, area_p),
+         pov_med = ifelse(pov_he >= median(pov_he), 1, 0)) 
+                          # 1 = above median (poor; high poverty area)
+                          # 0 = below median (rich; low poverty area)
+
+# Utilization rate
+data.m.dl <- within(data.m.dl, {
+  
+  # Imputed rates
+  opo5r <- opo5 / age_o5.m * 1000
+  opu5r <- opu5 / age_u5.m * 1000
+  ipo5r <- ipo5 / age_o5.m * 100000
+  ipu5r <- ipu5 / age_u5.m * 100000
+  iplos <- ipday / (ipo5 + ipu5)
+  opipo5r <- opo5 / ipo5
+  opipu5r <- opu5 / ipu5 
+  
+  # log (count)
+  lopo5 <- ifelse(opo5 > 0, log(opo5), NA)
+  lopu5 <- ifelse(opu5 > 0, log(opu5), NA)
+  lipo5 <- ifelse(ipo5 > 0, log(ipo5), NA)
+  lipu5 <- ifelse(ipu5 > 0, log(ipu5), NA)
+  lipday <- ifelse(ipday > 0, log(ipday), NA)
+  ldel <- ifelse(del > 0, log(del), NA)
+
+  # log (count + 1)
+  l1opo5 <- ifelse(opo5 > 0, log(opo5+1), NA)
+  l1opu5 <- ifelse(opu5 > 0, log(opu5+1), NA)
+  l1ipo5 <- ifelse(ipo5 > 0, log(ipo5+1), NA)
+  l1ipu5 <- ifelse(ipu5 > 0, log(ipu5+1), NA)
+  l1ipday <- ifelse(ipday > 0, log(ipday+1), NA)
+  l1del <- ifelse(del > 0, log(del+1), NA)
+
+  # Raw rates (without imputation)
+  opo5r.raw <- opo5.raw / age_o5.m * 1000
+  opu5r.raw <- opu5.raw / age_u5.m * 1000
+  ipo5r.raw <- ipo5.raw / age_o5.m * 100000
+  ipu5r.raw <- ipu5.raw / age_u5.m * 100000
+  iplos.raw <- ipday.raw / (ipo5.raw + ipu5.raw)
+  opipo5r.raw <- opo5.raw / ipo5.raw
+  opipu5r.raw <- opu5.raw / ipu5.raw
+  
+  # Rates without ANC, PNC, Delivery deduction
+  opo5r.nodec <- opo5.nodec / age_o5.m * 1000
+  ipo5r.nodec <- ipo5.nodec / age_o5.m * 100000
+
+  # Delivery rates
+  delr <- del / (birth.m / 12)
+  delr.raw <- del.raw / (birth.m / 12)
+  
+  # Facility number per 10,000 population (time varying)
+  facu5 <- facnum / age_u5.m * 10000
+  faco5 <- facnum / age_o5.m * 10000
+  logfacn <- ifelse(facnum > 0, log(facnum), NA)
+})
+
+data.m.dl <- data.m.dl %>%
+  group_by(dnum) %>%
+  mutate(facnum_fixed = facnum[event == -1][1],
+         facnum_fixed = if_else(event < -1, facnum, facnum_fixed)) %>%
+  ungroup()
+
+# Replace 'Inf' with zero for outcome variable
+var.names <- c("opo5r", "opu5r", "ipo5r", "ipu5r",
+               "opo5r.nodec", "ipo5r.nodec",
+               "iplos", "delr",
+               "opipo5r", "opipu5r",
+               "opo5r.raw", "opu5r.raw", "ipo5r.raw", "ipu5r.raw",
+               "iplos.raw", "delr.raw")
+
+for (i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  data.m.dl <<- data.m.dl %>%
+    mutate(!!var1 := ifelse(is.infinite(!!var1), 0, !!var1))
+}
+
+data.m.dl.stat <- lapply(var.names, function(var) {
+  data <- data.m.dl[[var]]
+  data.frame(indicator = var,
+             non_NA = sum(!is.na(data)),
+             zeros = sum(data == 0, na.rm = TRUE),
+             NA_cnt = sum(is.na(data)),
+             inf = sum(is.infinite(data)))
+}) %>% bind_rows()
+data.m.dl.stat
+
+# Save clean data
+data.cln.m.dl <- data.m.dl # district-level
+write_xlsx(data.cln.m.dl, "./data export/02_clean_8_cln_m_dl.xlsx") 
+
+# ------------------------------------------------------------------------------
+# Facility-level data (monthly)
+# ------------------------------------------------------------------------------
+# data.m.fl <- read_excel("./data export/02_clean_7_m_fl.xlsx", guess_max = 100000)
+
+# Add population data
+data.m.fl <- data.m.fl %>%
+  left_join(data.pop.m.prov, by = c("pnum", "month", "faclevel")) %>%
+  left_join(data.pop.m.dist, by = c("pnum", "district", "month")) %>%
+  mutate(age_u5.m = rowSums(across(c("pop_age_u5.m.d", "pop_age_u5.m.p")), 
+                            na.rm = TRUE),
+         age_o5.m = rowSums(across(c("pop_age_o5.m.d", "pop_age_o5.m.p")), 
+                            na.rm = TRUE),
+         birth.m = rowSums(across(c("pop_birthlive.m.d", "pop_birthlive.m.p")), 
+                            na.rm = TRUE),
+         age_m = age_u5.m + age_o5.m)
+
+# Add poverty and covariates data
+data.m.fl <- data.m.fl %>%
+  mutate(dnum = as.numeric(dnum)) %>%
+  left_join(pvty_p, by = c("pnum", "faclevel")) %>%
+  left_join(pvty_d, by = "dnum") %>%
+  mutate(pov_he = coalesce(pov_he_d, pov_he_p),
+         pov_ga = coalesce(pov_ga_d, pov_ga_p),
+         pov_se = coalesce(pov_se_d, pov_se_p),
+         imps = coalesce(imps_d, imps_p),
+         litr = coalesce(litr_d, litr_p),
+         semp = coalesce(semp_d, semp_p),
+         urba = coalesce(urba_d, urba_p),
+         area = coalesce(area_d, area_p),
+         pov_med = ifelse(pov_he >= median(pov_he, na.rm = TRUE), 1, 0))
+                          # 1 = above median (poor; high poverty area)
+                          # 0 = below median (rich; low poverty area)
+
+# Utilization rate
+data.m.fl <- within(data.m.fl, {
+  
+  # Imputed rates
+  opo5r <- opo5 / age_o5.m * 1000
+  opu5r <- opu5 / age_u5.m * 1000
+  ipo5r <- ipo5 / age_o5.m * 100000
+  ipu5r <- ipu5 / age_u5.m * 100000
+  iplos <- ipday / (ipo5 + ipu5)
+  opipo5r <- opo5 / ipo5
+  opipu5r <- opu5 / ipu5
+
+    # log (count)
+  lopo5 <- ifelse(opo5 > 0, log(opo5), NA)
+  lopu5 <- ifelse(opu5 > 0, log(opu5), NA)
+  lipo5 <- ifelse(ipo5 > 0, log(ipo5), NA)
+  lipu5 <- ifelse(ipu5 > 0, log(ipu5), NA)
+  lipday <- ifelse(ipday > 0, log(ipday), NA)
+  ldel <- ifelse(del > 0, log(del), NA)
+
+  # log (count + 1)
+  l1opo5 <- ifelse(opo5 > 0, log(opo5+1), NA)
+  l1opu5 <- ifelse(opu5 > 0, log(opu5+1), NA)
+  l1ipo5 <- ifelse(ipo5 > 0, log(ipo5+1), NA)
+  l1ipu5 <- ifelse(ipu5 > 0, log(ipu5+1), NA)
+  l1ipday <- ifelse(ipday > 0, log(ipday+1), NA)
+  l1del <- ifelse(del > 0, log(del+1), NA)
+
+  # Raw rates (without imputation)
+  opo5r.raw <- opo5.raw / age_o5.m * 1000
+  opu5r.raw <- opu5.raw / age_u5.m * 1000
+  ipo5r.raw <- ipo5.raw / age_o5.m * 100000
+  ipu5r.raw <- ipu5.raw / age_u5.m * 100000
+  iplos.raw <- ipday.raw / (ipo5.raw + ipu5.raw)
+  opipo5r.raw <- opo5.raw / ipo5.raw
+  opipu5r.raw <- opu5.raw / ipu5.raw
+
+  # Rates without ANC, PNC, Delivery deduction
+  opo5r.nodec <- opo5.nodec / age_o5.m * 1000
+  ipo5r.nodec <- ipo5.nodec / age_o5.m * 100000
+
+  # Delivery rates
+  delr <- del / (birth.m / 12)
+  delr.raw <- del.raw / (birth.m / 12)
+  
+  # Facility number per 10,000 population (time varying)
+  facu5 <- facnum / age_u5.m * 10000
+  faco5 <- facnum / age_o5.m * 10000
+  logfacn <- ifelse(facnum > 0, log(facnum), NA)
+})
+
+data.m.fl <- data.m.fl %>%
+  group_by(dnum) %>%
+  mutate(facnum_fixed = facnum[event == -1][1],
+         facnum_fixed = if_else(event < -1, facnum, facnum_fixed)) %>%
+  ungroup()
+
+# Replace 'Inf' with zero for outcome variable
+var.names <- c("opo5r", "opu5r", "ipo5r", "ipu5r",
+               "opo5r.nodec", "ipo5r.nodec",
+               "iplos", "delr",
+               "opipo5r", "opipu5r",
+               "opo5r.raw", "opu5r.raw", "ipo5r.raw", "ipu5r.raw",
+               "iplos.raw", "delr.raw")
+
+for (i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  data.m.fl <<- data.m.fl %>%
+    mutate(!!var1 := ifelse(is.infinite(!!var1), 0, !!var1))
+}
+
+data.m.fl.stat <- lapply(var.names, function(var) {
+  data <- data.m.fl[[var]]
+  data.frame(indicator = var,
+             non_NA = sum(!is.na(data)),
+             zeros = sum(data == 0, na.rm = TRUE),
+             NA_cnt = sum(is.na(data)),
+             inf = sum(is.infinite(data)))
+}) %>% bind_rows()
+data.m.fl.stat
+
+# Save clean data
+data.cln.m.fl <- data.m.fl # facility-level
+write_xlsx(data.cln.m.fl, "./data export/02_clean_8_cln_m_fl.xlsx") 
+
+```
+<br>
+
+# Add covariates (quarter)
+<br>
+```{r covariate quarter, warning=FALSE}
+
+# Load population data (quarterly)
+data.pop.q.prov <- read_excel("./data export/01_data_pop_q_p.xlsx")
+data.pop.q.dist <- read_excel("./data export/01_data_pop_q_d.xlsx")
+
+# ------------------------------------------------------------------------------
+# District-level data (quarterly)
+# ------------------------------------------------------------------------------
+# data.q.dl <- read_excel("./data export/02_clean_7_q_dl.xlsx", guess_max = 100000)
+
+# Add population data
+data.q.dl <- data.q.dl %>%
+  left_join(data.pop.q.prov, by = c("pnum", "quarter", "faclevel")) %>%
+  left_join(data.pop.q.dist, by = c("pnum", "district", "quarter")) %>%
+  mutate(age_u5.q = rowSums(across(c("pop_age_u5.q.d", "pop_age_u5.q.p")), 
+                            na.rm = TRUE),
+         age_o5.q = rowSums(across(c("pop_age_o5.q.d", "pop_age_o5.q.p")), 
+                            na.rm = TRUE),
+         birth.q = rowSums(across(c("pop_birthlive.q.d", "pop_birthlive.q.p")), 
+                            na.rm = TRUE),
+         age_q = age_u5.q + age_o5.q)
+
+# Lao poverty and covariates data
+# Data Fields [2015] PCode = province Code; province = province Name; DCode = district Code; district = district Name; Area = Area in sq km; Density = Population density per sq km; Population = Number of population; Village_Nu = Total districts; Household = Total households; Urban_popu = Percentage of urban population; Poverty_He = Poverty Headcount Rate (%); Poverty_Ga = Poverty Gap Rate (%); Poverty_Se = Poverty Severity Rate (%); Improved_S = Percentage of population using improved sanitation; Improved_W = Percentage of population using improved water sources; Using_Elec = Percentage of population accessing electricity; Own_a_Phon = Percentage of population owning a telephone
+
+# Lit_rate_1564old = Literacy rate 15-64 old
+# Self_employment_rate = Self-employment rate
+
+# Load poverty and covariates data
+pvty_p <- read_excel("./data import/lao_poverty_2015.xlsx",
+                     sheet = "Lao Poverty 2015 by province") %>%
+  dplyr::select(pnum, Poverty_He, Poverty_Ga, Poverty_Se, Improved_S,
+         Lit_rate_1564old, Self_employment_rate, Urban_popu, Area) %>%
+  mutate(across(Poverty_He:Urban_popu, ~ .x / 100)) %>%
+  rename_with(~ c("pnum", "pov_he_p", "pov_ga_p", "pov_se_p",
+                  "imps_p", "litr_p", "semp_p", "urba_p", "area_p")) %>%
+  mutate(faclevel = "PH")
+
+pvty_d <- read_excel("./data import/lao_poverty_2015.xlsx",
+                     sheet = "Lao Poverty 2015 by district") %>%
+  dplyr::select(dnum, Poverty_He, Poverty_Ga, Poverty_Se, Improved_S,
+         Lit_rate_1564old, Self_employment_rate, Urban_popu, Area) %>%
+  mutate(across(Poverty_He:Urban_popu, ~ .x / 100)) %>%
+  rename_with(~ c("dnum", "pov_he_d", "pov_ga_d", "pov_se_d",
+                  "imps_d", "litr_d", "semp_d", "urba_d", "area_d"))
+
+# Add poverty and covariates data
+data.q.dl <- data.q.dl %>%
+  mutate(dnum = as.numeric(dnum)) %>%
+  left_join(pvty_p, by = c("pnum", "faclevel")) %>%
+  left_join(pvty_d, by = "dnum") %>%
+  mutate(pov_he = coalesce(pov_he_d, pov_he_p),
+         pov_ga = coalesce(pov_ga_d, pov_ga_p),
+         pov_se = coalesce(pov_se_d, pov_se_p),
+         imps = coalesce(imps_d, imps_p),
+         litr = coalesce(litr_d, litr_p),
+         semp = coalesce(semp_d, semp_p),
+         urba = coalesce(urba_d, urba_p),
+         area = coalesce(area_d, area_p),
+         pov_med = ifelse(pov_he >= median(pov_he, na.rm = TRUE), 1, 0))
+                          # 1 = above median (poor; high poverty area)
+                          # 0 = below median (rich; low poverty area)
+
+# Utilization rate
+data.q.dl <- within(data.q.dl, {
+  
+  # Imputed rates
+  opo5r <- opo5 / age_o5.q * 1000
+  opu5r <- opu5 / age_u5.q * 1000
+  ipo5r <- ipo5 / age_o5.q * 100000
+  ipu5r <- ipu5 / age_u5.q * 100000
+  iplos <- ipday / (ipo5 + ipu5)
+  opipo5r <- opo5 / ipo5
+  opipu5r <- opu5 / ipu5
+
+    # log (count)
+  lopo5 <- ifelse(opo5 > 0, log(opo5), NA)
+  lopu5 <- ifelse(opu5 > 0, log(opu5), NA)
+  lipo5 <- ifelse(ipo5 > 0, log(ipo5), NA)
+  lipu5 <- ifelse(ipu5 > 0, log(ipu5), NA)
+  lipday <- ifelse(ipday > 0, log(ipday), NA)
+  ldel <- ifelse(del > 0, log(del), NA)
+
+  # log (count + 1)
+  l1opo5 <- ifelse(opo5 > 0, log(opo5+1), NA)
+  l1opu5 <- ifelse(opu5 > 0, log(opu5+1), NA)
+  l1ipo5 <- ifelse(ipo5 > 0, log(ipo5+1), NA)
+  l1ipu5 <- ifelse(ipu5 > 0, log(ipu5+1), NA)
+  l1ipday <- ifelse(ipday > 0, log(ipday+1), NA)
+  l1del <- ifelse(del > 0, log(del+1), NA)
+
+  # Raw rates (without imputation)
+  opo5r.raw <- opo5.raw / age_o5.q * 1000
+  opu5r.raw <- opu5.raw / age_u5.q * 1000
+  ipo5r.raw <- ipo5.raw / age_o5.q * 100000
+  ipu5r.raw <- ipu5.raw / age_u5.q * 100000
+  iplos.raw <- ipday.raw / (ipo5.raw + ipu5.raw)
+  opipo5r.raw <- opo5.raw / ipo5.raw
+  opipu5r.raw <- opu5.raw / ipu5.raw
+
+  # Rates without ANC, PNC, Delivery deduction
+  opo5r.nodec <- opo5.nodec / age_o5.q * 1000
+  ipo5r.nodec <- ipo5.nodec / age_o5.q * 100000
+  
+  # Delivery rates
+  delr <- del / (birth.q / 4)
+  delr.raw <- del.raw / (birth.q / 4)
+  
+  # Facility number per 10,000 population (time varying)
+  facu5 <- facnum / age_u5.q * 10000
+  faco5 <- facnum / age_o5.q * 10000
+  logfacn <- ifelse(facnum > 0, log(facnum), NA)
+})
+
+data.q.dl <- data.q.dl %>%
+  group_by(dnum) %>%
+  mutate(facnum_fixed = facnum[event == -1][1],
+         facnum_fixed = if_else(event < -1, facnum, facnum_fixed)) %>%
+  ungroup()
+
+# Replace 'Inf' with zero for outcome variable
+var.names <- c("opo5r", "opu5r", "ipo5r", "ipu5r",
+               "opo5r.nodec", "ipo5r.nodec",
+               "iplos", "delr",
+               "opipo5r", "opipu5r",
+               "opo5r.raw", "opu5r.raw", "ipo5r.raw", "ipu5r.raw",
+               "iplos.raw", "delr.raw")
+
+for (i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  data.q.dl <<- data.q.dl %>%
+    mutate(!!var1 := ifelse(is.infinite(!!var1), 0, !!var1))
+}
+
+data.q.dl.stat <- lapply(var.names, function(var) {
+  data <- data.q.dl[[var]]
+  data.frame(indicator = var,
+             non_NA = sum(!is.na(data)),
+             zeros = sum(data == 0, na.rm = TRUE),
+             NA_cnt = sum(is.na(data)),
+             inf = sum(is.infinite(data)))
+}) %>% bind_rows()
+data.q.dl.stat
+
+# Save clean data
+data.cln.q.dl <- data.q.dl  # district-level
+write_xlsx(data.cln.q.dl, "./data export/02_clean_8_cln_q_dl.xlsx")
+
+# ------------------------------------------------------------------------------
+# Facility-level data (quarterly)
+# ------------------------------------------------------------------------------
+# data.q.fl <- read_excel("./data export/02_clean_7_q_fl.xlsx", guess_max = 100000)
+
+# Add population data
+data.q.fl <- data.q.fl %>%
+  left_join(data.pop.q.prov, by = c("pnum", "quarter", "faclevel")) %>%
+  left_join(data.pop.q.dist, by = c("pnum", "district", "quarter")) %>%
+  mutate(age_u5.q = rowSums(across(c(pop_age_u5.q.d, pop_age_u5.q.p)), 
+                            na.rm = TRUE),
+         age_o5.q = rowSums(across(c(pop_age_o5.q.d, pop_age_o5.q.p)), 
+                            na.rm = TRUE),
+         birth.q = rowSums(across(c(pop_birthlive.q.d, pop_birthlive.q.p)), 
+                            na.rm = TRUE),
+         age_q = age_u5.q + age_o5.q)
+
+# Add poverty and covariates data
+data.q.fl <- data.q.fl %>%
+  mutate(dnum = as.numeric(dnum)) %>%
+  left_join(pvty_p, by = c("pnum", "faclevel")) %>%
+  left_join(pvty_d, by = "dnum") %>%
+  mutate(pov_he = coalesce(pov_he_d, pov_he_p),
+         pov_ga = coalesce(pov_ga_d, pov_ga_p),
+         pov_se = coalesce(pov_se_d, pov_se_p),
+         imps = coalesce(imps_d, imps_p),
+         litr = coalesce(litr_d, litr_p),
+         semp = coalesce(semp_d, semp_p),
+         urba = coalesce(urba_d, urba_p),
+         area = coalesce(area_d, area_p),
+         pov_med = ifelse(pov_he >= median(pov_he, na.rm = TRUE), 1, 0))
+                          # 1 = above median (poor; high poverty area)
+                          # 0 = below median (rich; low poverty area)
+
+# Utilization rate
+data.q.fl <- within(data.q.fl, {
+  
+  # Imputed rates
+  opo5r <- opo5 / age_o5.q * 1000
+  opu5r <- opu5 / age_u5.q * 1000
+  ipo5r <- ipo5 / age_o5.q * 100000
+  ipu5r <- ipu5 / age_u5.q * 100000
+  iplos <- ipday / (ipo5 + ipu5)
+  opipo5r <- opo5 / ipo5
+  opipu5r <- opu5 / ipu5
+
+  # log (count)
+  lopo5 <- ifelse(opo5 > 0, log(opo5), NA)
+  lopu5 <- ifelse(opu5 > 0, log(opu5), NA)
+  lipo5 <- ifelse(ipo5 > 0, log(ipo5), NA)
+  lipu5 <- ifelse(ipu5 > 0, log(ipu5), NA)
+  lipday <- ifelse(ipday > 0, log(ipday), NA)
+  ldel <- ifelse(del > 0, log(del), NA)
+
+  # log (count + 1)
+  l1opo5 <- ifelse(opo5 > 0, log(opo5+1), NA)
+  l1opu5 <- ifelse(opu5 > 0, log(opu5+1), NA)
+  l1ipo5 <- ifelse(ipo5 > 0, log(ipo5+1), NA)
+  l1ipu5 <- ifelse(ipu5 > 0, log(ipu5+1), NA)
+  l1ipday <- ifelse(ipday > 0, log(ipday+1), NA)
+  l1del <- ifelse(del > 0, log(del+1), NA)
+
+  # Raw rates (without imputation)
+  opo5r.raw <- opo5.raw / age_o5.q * 1000
+  opu5r.raw <- opu5.raw / age_u5.q * 1000
+  ipo5r.raw <- ipo5.raw / age_o5.q * 100000
+  ipu5r.raw <- ipu5.raw / age_u5.q * 100000
+  iplos.raw <- ipday.raw / (ipo5.raw + ipu5.raw)
+  opipo5r.raw <- opo5.raw / ipo5.raw
+  opipu5r.raw <- opu5.raw / ipu5.raw
+
+  # Rates without ANC, PNC, Delivery deduction
+  opo5r.nodec <- opo5.nodec / age_o5.q * 1000
+  ipo5r.nodec <- ipo5.nodec / age_o5.q * 100000
+  
+  # Delivery rates
+  delr <- del / (birth.q / 4)
+  delr.raw <- del.raw / (birth.q / 4)
+  
+  # Facility number per 10,000 population (time varying)
+  facu5 <- facnum / age_u5.q * 10000
+  faco5 <- facnum / age_o5.q * 10000
+  logfacn <- ifelse(facnum > 0, log(facnum), NA)
+})
+
+data.q.fl <- data.q.fl %>%
+  group_by(dnum) %>%
+  mutate(facnum_fixed = facnum[event == -1][1],
+         facnum_fixed = if_else(event < -1, facnum, facnum_fixed)) %>%
+  ungroup()
+
+# Replace 'Inf' with zero for outcome variable
+var.names <- c("opo5r", "opu5r", "ipo5r", "ipu5r",
+               "opo5r.nodec", "ipo5r.nodec",
+               "iplos", "delr",
+               "opipo5r", "opipu5r",
+               "opo5r.raw", "opu5r.raw", "ipo5r.raw", "ipu5r.raw",
+               "iplos.raw", "delr.raw")
+
+for (i in 1:length(var.names)) {
+  var1 <- rlang::sym(var.names[i])
+  data.q.fl <<- data.q.fl %>%
+    mutate(!!var1 := ifelse(is.infinite(!!var1), 0, !!var1))
+}
+
+data.q.fl.stat <- lapply(var.names, function(var) {
+  data <- data.q.fl[[var]]
+  data.frame(indicator = var,
+             non_NA = sum(!is.na(data)),
+             zeros = sum(data == 0, na.rm = TRUE),
+             NA_cnt = sum(is.na(data)),
+             inf = sum(is.infinite(data)))
+}) %>% bind_rows()
+data.q.fl.stat
+
+# Save clean data
+data.cln.q.fl <- data.q.fl # facility-level
+write_xlsx(data.cln.q.fl, "./data export/02_clean_8_cln_q_fl.xlsx")
+
+```
+<br>
+
+# Final plots (raw vs imputed)
+<br>
+```{r final check, message=FALSE, warning=FALSE}
+
+# data.m.fl <- read_excel("./data export/02_clean_8_cln_m_fl.xlsx", guess_max = 100000)
+
+# Generate plot by province (all variables)
+var.names <- c("opo5","opu5","ipo5","ipu5","ipday",
+               "opo5r","opu5r","ipo5r","ipu5r","iplos",
+               # "opo5.nodec","ipo5.nodec",
+               # "smsrgo5","smsrgu5",
+               "anc1","anc4","anc","pnc",
+               "del", "delr",
+               # "opob1o5","ipob1o5",
+               "fic1")
+var.names.raw <- paste0(var.names,".raw")
+
+# ------------------------------------------------------------------------------
+# Monthly plot (raw vs imputed)
+# ------------------------------------------------------------------------------
+
+# Create index for plot
+icpidxm <- data.m.fl %>% 
+  dplyr::select(province, group) %>% 
+  distinct() %>% 
+  pull(group)
+
+str(data.m.fl$month)
+mchidx <- data.m.fl %>% 
+  filter(as.character(month) == "2017-10-01") %>% 
+  dplyr::select(c("time")) %>% 
+  unique() %>% 
+  as.integer()
+
+if(!dir.exists("./clean/7.check")) {dir.create("./clean/7.check")}
+if(!dir.exists("./clean/7.check/m.fl")) {dir.create("./clean/7.check/m.fl")}
+
+# By facility level (dfl: PH, DH, HC)
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  rawpoint <- rlang::sym(var.names.raw[j])
+  
+  plot <- ggplot(data.m.fl, aes(x = time, y = !!variable)) +
+    geom_point(aes(y = !!rawpoint), col = "red") + # raw point
+    geom_point(color = "grey") +                   # imputed point
+    ylim(0, NA) +
+    facet_wrap(~dfl, ncol = 5, scales = "free") +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      strip.background = element_rect(fill = "grey90"),
+      strip.text = element_text(color = "black", size = 6, face = "bold"),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm"))) +
+    guides(fill = guide_legend(nrow = 1))
+  
+  png(paste("./clean/7.check/m.fl/", var.names[j], ".png", sep = ""), 
+      units = "in", width = 6.5, height = 75, res = 500)
+  print(plot)
+  dev.off()
+}
+
+# data.m.dl <- read_excel("./data export/02_clean_8_cln_m_dl.xlsx", guess_max = 100000)
+# At district level (dl: HC, DHHC, PH)
+if(!dir.exists("./clean/7.check/m.dl")) {dir.create("./clean/7.check/m.dl")}
+
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  rawpoint <- rlang::sym(var.names.raw[j])
+
+  plot <- ggplot(data.m.dl, aes(x = time, y = !!variable)) +
+    geom_point(aes(y = !!rawpoint), col = "red") + # raw point
+    geom_point(color = "grey") +                   # imputed point
+    ylim(0, NA) +
+    facet_wrap(~dl, ncol = 5, scales = "free") +
+    theme_light() +
+    theme(
+      panel.border     = element_rect(colour = "grey90"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x     = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y     = element_text(size = 8),
+      axis.text.y      = element_text(size = 6),
+      axis.text.x      = element_text(size = 6, hjust = -0.125),
+      strip.background = element_rect(fill = "grey90"),
+      strip.text       = element_text(color = "black", size = 6, face = "bold"),
+      strip.text.x     = element_text(margin = margin(0.1, 0, 0.1, 0, "cm"))
+    ) +
+    guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/7.check/m.dl/", var.names[j], ".png", sep = ""),
+      units = "in", width = 6.5, height = 40, res = 400)
+  print(plot)
+  dev.off()
+}
+
+# ------------------------------------------------------------------------------
+# Quarterly plot (raw vs imputed)
+# ------------------------------------------------------------------------------
+
+# data.q.fl <- read_excel("./data export/02_clean_8_cln_q_fl.xlsx", guess_max = 100000)
+# By facility level (dfl: PH, DH, HC)
+
+# Create inception index for plot
+icpindexq <- data.q.fl %>% 
+  dplyr::select(province, group, quarter, event) %>% 
+  filter(event == 0) %>%
+  distinct() %>% 
+  dplyr::select(-event) %>%
+  rename(xvline = group)
+
+# Index
+str(data.q.fl$quarter)
+mchidx <- data.q.fl %>%
+  filter(as.character(quarter) == "2017.4") %>%
+  dplyr::select(time) %>%
+  distinct() %>%
+  pull(time) %>%
+  as.integer()
+
+if(!dir.exists("./clean/7.check")) {dir.create("./clean/7.check")}
+if(!dir.exists("./clean/7.check/q.fl")) {dir.create("./clean/7.check/q.fl")}
+
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  rawpoint <- rlang::sym(var.names.raw[j])
+
+  plot <- ggplot(data.q.fl, aes(x = time, y = !!variable)) +
+    geom_point(aes(y = !!rawpoint), col = "red") + # raw point
+    geom_point(color = "grey") +                   # imputed point
+    ylim(0, NA) +
+    facet_wrap(~dfl, ncol = 5, scales = "free") +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      strip.background = element_rect(fill = "grey90"),
+      strip.text = element_text(color = "black", size = 6, face = "bold"),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm"))) +
+    guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/7.check/q.fl/", var.names[j], ".png", sep = ""),
+      units = "in", width = 6.5, height = 75, res = 500)
+  print(plot)
+  dev.off()
+}
+
+# data.q.dl <- read_excel("./data export/02_clean_8_cln_q_dl.xlsx", guess_max = 100000)
+# By district level (dl: HC, DHHC, PH)
+
+if(!dir.exists("./clean/7.check")) {dir.create("./clean/7.check")}
+if(!dir.exists("./clean/7.check/q.dl")) {dir.create("./clean/7.check/q.dl")}
+
+data.q.dl <- data.q.dl %>%
+  mutate(xvline = ifelse(event == 0, time ,NA))
+
+for (j in 1:length(var.names)) {
+  variable <- rlang::sym(var.names[j])
+  rawpoint <- rlang::sym(var.names.raw[j])
+
+  plot <- ggplot(data.q.dl, aes(x = time, y = !!variable)) +
+    geom_point(aes(y = !!rawpoint), col = "red") +   # raw point
+    geom_point(color = "grey") +                     # imputed point
+    ylim(0, NA) +
+    facet_wrap(~dl, ncol = 5, scales = "free") +
+    geom_vline(aes(xintercept = xvline), linetype = "dashed",
+               col = "black", alpha = 0.6) +
+    theme_light() +
+    theme(
+      panel.border = element_rect(colour = "grey90"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(size = 8, margin = margin(t = 6, l = 0)),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 6),
+      axis.text.x = element_text(size = 6, hjust = -0.125),
+      strip.background = element_rect(fill = "grey90"),
+      strip.text = element_text(color = "black", size = 6, face = "bold", hjust = 0),
+      strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm"))) +
+    guides(fill = guide_legend(nrow = 1))
+
+  png(paste("./clean/7.check/q.dl/", var.names[j], ".png", sep = ""),
+      units = "in", width = 6.5, height = 40, res = 500)
+  print(plot)
+  dev.off()
+}
+
+```
+<br>
+
+# Log close
+<br>
+```{r log_close}
+
+# Log close
+log_close(footer = TRUE)
+writeLines(readLines(logrecord))
+
+```
+<br>

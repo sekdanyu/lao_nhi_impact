@@ -1,0 +1,1869 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Setup
+<br>
+```{r setup}
+
+# Set working directory
+rm(list = ls(all.names = TRUE))
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# Install and load packages
+source("lao_nhi_0_package.r", echo = TRUE)
+
+# Create directories
+if(!dir.exists("./log")) {dir.create("./log")}
+
+# Log
+logpath <- file.path(getwd(), "log", "lao_nhi_3_baseline_and_overlap.log")
+logrecord <- log_open(logpath, autolog = TRUE, show_notes = FALSE)
+log_code()
+
+```
+<br>
+
+# Load data
+<br>
+```{r load}
+
+data.cln <- read_excel("./data export/02_clean_8_cln_q_dl.xlsx") # district
+warnings()
+str(data.cln)
+
+data <- data.cln
+
+# Check number of district
+data %>% 
+  filter(faclevel != "PH") %>% 
+  summarise(count = n_distinct(district)) %>% # total district; 148
+  put()
+
+data %>% 
+  filter(faclevel != "PH", treat == 1) %>% 
+  summarise(count = n_distinct(district)) %>% # total district with NHI; 139
+  put()
+
+data %>% 
+  group_by(province) %>% 
+  filter(faclevel != "PH") %>% 
+  summarise(count = n_distinct(district)) %>%
+  put()
+
+data %>% 
+  group_by(province, district) %>% 
+  summarize(n = n()) %>% 
+  print(n = Inf) %>%
+  put()
+
+# Filter data
+data <- data %>% 
+  filter(
+    !(province %in% c("15 Xekong")), # Drop NHI pilot province
+    !(district %in% c("1008 Met", "1009 Viangkham", "1011 Mun",
+                      "1306 Nong", "1408 Samouay")), # Drop NHI pilot districts
+    !(district %in% c("0201 Phongsali")), # Drop district without CU5 in Q4/2015
+    !str_detect(faclevel, "PH"), # Remove provincial hospitals
+    !(quarter %in% c("2015.1", "2015.2", "2015.3"))) # Quarters to drop
+ 
+# District with PH or HC only
+# PH: XX00
+# PSL 0205 Bounnua: HC only
+# LNT 0301 Namtha: HC only
+# ODX 0401 Xai: HC only
+# HPN 0701 Xamnua: HC only
+# XYB 0801 Xainyabouli: HC only
+# XKG 0901 Pek: HC only
+# BKX 1101 Pakxan: HC only
+# KMN 1201 Thakhek: HC only
+# SVK 1301 Kaysone Phomvihane: HC only
+# SRV 1401 Salavan: HC only 
+# SEK 1501 Lamam: HC only
+# CPS 1601 Pakxe: HC only 
+# ATP 1702 Samakhixai: HC only 
+# XSB 1801 Anouvong: HC only 
+
+# 1210 Khounkham - excluded in facility-level analysis but included in district-level analyses
+
+# Excluding these 12 districts with HC only (due to the presence of PH), increases the DID estimates by about 0.05 points.
+#data <- subset(data,District!="0205 Bounnua") # HC only
+#data <- subset(data,District!="0301 Namtha") # HC only
+#data <- subset(data,District!="0401 Xai") # HC only
+#data <- subset(data,District!="0701 Xamnua") # HC only
+#data <- subset(data,District!="0801 Xainyabouli") # HC only
+#data <- subset(data,District!="0901 Pek") # HC only
+#data <- subset(data,District!="1201 Thakhek") # HC only
+#data <- subset(data,District!="1301 Kaysone Phomvihane") # HC only
+#data <- subset(data,District!="1401 Salavan") # HC only
+#data <- subset(data,District!="1601 Pakxe") # HC only
+#data <- subset(data,District!="1702 Samakhixai") # HC only
+#data <- subset(data,District!="1801 Anouvong") # HC only
+
+# Create directories
+if(!dir.exists("./output")) {dir.create("./output")}
+if(!dir.exists("./graph")) {dir.create("./graph")}
+
+```
+<br>
+
+# Table 1. Baseline characteristics
+<br>
+```{r tbl_1, warning=FALSE}
+
+# package tableone
+# http://www.danieldsjoberg.com/gtsummary-weill-cornell-presentation/#14
+        
+colnames(data)
+str(data)
+
+# District-level population characteristics
+# Intervention  Control   
+# 4, 5, 6, 8    9
+table1a <- data %>%
+ filter(quarter == 2016.2) %>%                    # filter unique quarter
+ filter(group != 0) %>%                           # remove never treated
+ dplyr::select(group, facnum, semp, urba, imps, litr, 
+        opo5r, opu5r, ipo5r, ipu5r, iplos, delr) %>%
+ mutate(across(c(delr, semp, urba, imps, litr), ~ .x * 100)) %>%
+ mutate(treat_g = factor(ifelse(group == 9, "Control", "Intervention"),
+                         levels = c("Intervention", "Control"))) %>%
+ tbl_strata(strata = treat_g,
+            ~tbl_summary(.x,
+                         by = group,
+                         statistic = list(
+                           all_continuous() ~ "{mean} ({sd})"),
+                         label = list(
+                           facnum ~ "Mean number of health facilities",
+                           semp ~ "Self-employed population, %",
+                           urba ~ "Urban population, %",
+                           imps ~ "Improved sanitation, % ",
+                           litr ~ "Literacy among aged 15-64, %",
+                           opo5r ~ "Outpatient visits ≥ 5, per 1,000",
+                           opu5r ~ "Outpatient visits < 5, per 1,000",
+                           ipo5r ~ "Inpatient admissions ≥ 5, per 100,000",
+                           ipu5r ~ "Inpatient admissions < 5, per 100,000",
+                           iplos ~ "Inpatient length of stay, days",
+                           delr ~ "Institutional delivery, %"),
+                         digits = list(
+                           facnum ~ 0, semp ~ 1, urba ~ 1, imps ~ 1, litr ~ 1, 
+                           opo5r ~ 0, opu5r ~ 0, ipo5r ~ 0, ipu5r ~ 0, 
+                           iplos ~ 1,   # 1201 Thakhek missing
+                           delr ~ 1),
+                         missing = "no") %>%
+              add_p(test = all_continuous() ~ "oneway.test",
+                    test.args = list(var.equal = TRUE)) %>%
+              modify_header(all_stat_cols() ~ "**{level}**<br>(n={n})",
+                            p.value ~ "**p-value**") %>%
+              remove_footnote_header(columns = everything()))  # remove footnote 1
+# modify_column_alignment(columns = everything(), align = "center")
+
+table1a
+show_header_names(table1a) %>% put()
+
+# imps: Percentage of population using improved sanitation
+# litr: Literacy rate 15-64 old
+# semp: Self-employment rate
+# urba: Percentage of urban population
+
+pnumdnum <- data %>% 
+  group_by(group) %>%
+  summarize(pcount = n_distinct(province),
+            dcount = n_distinct(district)) %>%
+  mutate(pcount = as.numeric(pcount),
+         dcount = as.numeric(dcount)) %>%
+  put()
+
+pdcount <- data %>% 
+  group_by(group) %>%
+  summarize(pcount = n_distinct(province),
+            dcount = n_distinct(district)) %>%
+  mutate(pcount = as.numeric(pcount),
+         dcount = as.numeric(dcount),
+         p_by_d = pcount / dcount) %>%
+  put()
+
+table1 <- data %>%
+ filter(quarter == 2016.2) %>%  # filter unique quarter
+ filter(group != 0) %>%        # remove never treated
+ mutate(facnum2 = facnum) %>%
+ left_join(pdcount, by = c("group")) %>%
+ dplyr::select(p_by_d, district, group, facnum, facnum2, 
+        semp, urba, imps, litr, 
+        opo5r, opu5r, ipo5r, ipu5r, iplos, delr) %>%
+ mutate(district = 1) %>%
+ mutate(across(c(delr, semp, urba, imps, litr), ~ .x * 100))
+
+str(table1) %>% 
+  put()
+
+# Control group
+table1c <- table1 %>%
+ filter(group %in% c(5, 6, 8, 9)) %>%  # remove never treated
+ tbl_summary(by = group,
+             statistic = list(
+               p_by_d ~ "{sum}",
+               district ~ "{sum}",
+               facnum ~ "{sum}",
+               facnum2 ~ "{mean} ({sd})",
+               semp ~ "{mean} ({sd})",
+               urba ~ "{mean} ({sd})",
+               imps ~ "{mean} ({sd})",
+               litr ~ "{mean} ({sd})",
+               opo5r ~ "{mean} ({sd})",
+               opu5r ~ "{mean} ({sd})",
+               ipo5r ~ "{mean} ({sd})",
+               ipu5r ~ "{mean} ({sd})",
+               iplos ~ "{mean} ({sd})",
+               delr ~ "{mean} ({sd})"),
+             label = list(
+               p_by_d ~ "Province, n",
+               district ~ "District, n",
+               facnum ~ "Health facilities, n",
+               facnum2 ~ "Mean number of health facilities",
+               semp ~ "Self-employed population, %",
+               urba ~ "Urban population, %",
+               imps ~ "Access to improved sanitation, % ",
+               litr ~ "Literacy rate among aged 15-64, %",
+               opo5r ~ "Outpatient visits ≥ 5, per 1,000",
+               opu5r ~ "Outpatient visits < 5, per 1,000",
+               ipo5r ~ "Inpatient admissions ≥ 5, per 100,000",
+               ipu5r ~ "Inpatient admissions < 5, per 100,000",
+               iplos ~ "Inpatient length of stay, days",
+               delr ~ "Institutional delivery, %"),
+             digits = list(
+               p_by_d ~ 0, district ~ 0, facnum ~ 0, facnum2 ~ 1,
+               semp ~ 1, urba ~ 1, imps ~ 1, litr ~ 1,
+               opo5r ~ 0, opu5r ~ 0, ipo5r ~ 0, ipu5r ~ 0,
+               iplos ~ 1,   # 1201 Thakhek missing
+               delr ~ 1),
+             type = list(p_by_d ~ 'continuous',
+                         district ~ 'continuous',
+                         facnum ~ "continuous",
+                         facnum2 ~ "continuous"),
+             missing = "no") %>%
+#                      all_continuous() ~ 1)) %>%
+ modify_header(label = "**Variables**",
+               stat_1 ~ "G5\n(q4/2016)\nn={n}",
+               stat_2 ~ "G6\n(q1/2017)\nn={n}",
+               stat_3 ~ "G8\n(q3/2017)\nn={n}",
+               stat_4 ~ "G9\n(q4/2017)\nn={n}") %>%
+ add_overall(last = TRUE, col_label = "All control\ngroups\nn={n}") %>%
+ remove_footnote_header(columns = everything())  # remove footnote 1
+# modify_column_alignment(columns = everything(), align = "center")
+table1c %>% put()
+show_header_names(table1c) %>% # province number not correct!
+  put()
+
+# Treated group
+table1t <- table1 %>%
+ filter(group != 9) %>%  # remove never treated
+ tbl_summary(by = group,
+             statistic = list(
+               p_by_d ~ "{sum}",
+               district ~ "{sum}",
+               facnum ~ "{sum}",
+               facnum2 ~ "{mean} ({sd})",
+               semp ~ "{mean} ({sd})",
+               urba ~ "{mean} ({sd})",
+               imps ~ "{mean} ({sd})",
+               litr ~ "{mean} ({sd})",
+               opo5r ~ "{mean} ({sd})",
+               opu5r ~ "{mean} ({sd})",
+               ipo5r ~ "{mean} ({sd})",
+               ipu5r ~ "{mean} ({sd})",
+               iplos ~ "{mean} ({sd})",
+               delr ~ "{mean} ({sd})"),
+             label = list(
+               p_by_d ~ "Province, n",
+               district ~ "District, n",
+               facnum ~ "Health facilities, n",
+               facnum2 ~ "Mean number of health facilities",
+               semp ~ "Self-employed population, %",
+               urba ~ "Urban population, %",
+               imps ~ "Access to improved sanitation, % ",
+               litr ~ "Literacy rate among aged 15-64, %",
+               opo5r ~ "Outpatient visits ≥ 5, per 1,000",
+               opu5r ~ "Outpatient visits < 5, per 1,000",
+               ipo5r ~ "Inpatient admissions ≥ 5, per 100,000",
+               ipu5r ~ "Inpatient admissions < 5, per 100,000",
+               iplos ~ "Inpatient length of stay, days",
+               delr ~ "Institutional delivery, %"),
+             digits = list(
+               p_by_d ~ 0, district ~ 0, facnum ~ 0, facnum2 ~ 1,
+               semp ~ 1, urba ~ 1, imps ~ 1, litr ~ 1,
+               opo5r ~ 0, opu5r ~ 0, ipo5r ~ 0, ipu5r ~ 0,
+               iplos ~ 1,   # 1201 Thakhek missing
+               delr ~ 1),
+             type = list(p_by_d ~ 'continuous',
+                         district ~ 'continuous',
+                         facnum ~ "continuous",
+                         facnum2 ~ "continuous"),
+             missing = "no") %>%
+ modify_header(label = "**Variables**",
+               stat_1 ~ "G4\n(q3/2016)\nn={n}",
+               stat_2 ~ "G5\n(q4/2016)\nn={n}",
+               stat_3 ~ "G6\n(q1/2017)\nn={n}",
+               stat_4 ~ "G8\n(q3/2017)\nn={n}") %>%
+ add_overall(last = TRUE, col_label = "All treated\ngroups\nn={n}") %>%
+# modify_header(all_stat_cols() ~ "**{level}**\n(N={n})") %>%
+ remove_footnote_header(columns = everything())  # remove footnote 1
+# modify_table_body(~.x %>% dplyr::relocate(stat_0, .after = stat_4))
+# modify_column_alignment(columns = everything(), align = "center")
+table1t %>% put()
+show_header_names(table1t) %>% # province number not correct!
+  put()
+
+tbl_merge <- 
+  tbl_merge(
+    list(table1t, table1c),
+    tab_spanner = c("**Intervention**", "**Control**")) %>%
+  modify_caption("Table 1. Characteristics of samples, by group")
+tbl_merge
+
+set_flextable_defaults(font.family = "Times New Roman")
+tbl_merge %>%
+ as_flex_table() %>%
+ save_as_docx(path = "output/tbl_1_sample_characteristics.docx",
+              pr_section = prop_section(
+                page_size = page_size(orient = "landscape")))
+
+# Add top header: Mean value (SD)
+# Note: n is the total number of district-level units. Group (G) indicates group
+
+```
+<br>
+
+## Baseline differences in outcomes and covariates
+<br>
+```{r baseline dif, warning=FALSE}
+
+# Data is by district
+dist_baseline <- data %>%
+  filter(event == -1) %>%
+  filter(group != 0) %>%
+  group_by(district) %>%
+  summarise(
+    facnum = mean(facnum, na.rm = TRUE),
+    semp = mean(semp * 100, na.rm = TRUE),
+    urba = mean(urba * 100, na.rm = TRUE),
+    imps = mean(imps * 100, na.rm = TRUE),
+    litr = mean(litr * 100, na.rm = TRUE),
+    opo5 = mean(opo5, na.rm = TRUE),
+    opu5 = mean(opu5, na.rm = TRUE),
+    ipo5 = mean(ipo5, na.rm = TRUE),
+    ipu5 = mean(ipu5, na.rm = TRUE),
+    ipday = mean(ipday, na.rm = TRUE),
+    del = mean(del, na.rm = TRUE))
+
+dist_stats_long <- dist_baseline %>%
+  summarise(
+    across(
+      c(facnum, semp, urba, imps, litr,
+        opo5, opu5, ipo5, ipu5, ipday, del),
+      list(
+        mean = ~mean(.x, na.rm = TRUE),
+        median = ~median(.x, na.rm = TRUE),
+        sd   = ~sd(.x, na.rm = TRUE),
+        cv   = ~sd(.x, na.rm = TRUE) / mean(.x, na.rm = TRUE),
+        min  = ~min(.x, na.rm = TRUE),
+        max  = ~max(.x, na.rm = TRUE)),
+      .names = "{.col}_{.fn}")) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("variable", "stat"),
+    names_sep = "_",
+    values_to = "value")
+
+dist_stats_long <- dist_stats_long %>%
+  mutate(
+    value = case_when(
+      stat == "cv" ~ round(value, 2),   # keep precision
+      TRUE ~ round(value, 0)))
+
+dist_stats_long <- dist_stats_long %>%
+  mutate(
+    variable = recode(variable,
+      facnum = "Mean number of health facilities",
+      semp = "Self-employed population, %",
+      urba = "Urban population, %",
+      imps = "Improved sanitation, %",
+      litr = "Literacy among aged 15–64, %",
+      opo5 = "Outpatient visits ≥ 5",
+      opu5 = "Outpatient visits < 5",
+      ipo5 = "Inpatient admissions ≥ 5",
+      ipu5 = "Inpatient admissions < 5",
+      ipday = "Inpatient length of stay, days",
+      del = "Institutional delivery"),
+    stat = recode(stat,
+      mean = "Mean",
+      median = "Median",
+      sd = "Standard_deviation",
+      cv = "Coefficient_of_variation",
+      min = "Minimum",
+      max = "Maximum"))
+
+dist_stats_table <- dist_stats_long %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+dist_stats_table
+
+# mean is always larger than median; meaning long right tail
+
+write_xlsx(dist_stats_table, "./output/tbl_01_district_stats.xlsx")
+
+```
+<br>
+
+# B5. Covariate balance and treatment timing
+<br>
+```{r selection, warning=FALSE}
+
+data.cln <- read_excel("./data export/02_clean_8_cln_q_dl.xlsx") # district
+warnings()
+str(data.cln)
+
+data <- data.cln
+
+# Drop pilot districts and PH
+data <- data %>%
+ filter(
+   !(province %in% c("15 Xekong")),  # Drop NHI pilot province
+   !(district %in% c("1008 Met", "1009 Viangkham", "1011 Mun",
+                     "1306 Nong", "1408 Samouay")),  # Drop NHI pilot districts
+   !(district %in% c("0201 Phongsali")),  # Drop district without CU5 in Q4/2015
+   !str_detect(faclevel, "PH"),  # Remove provincial hospitals
+   !(quarter %in% c("2015.1", "2015.2", "2015.3")))  # Quarters to drop
+
+df_dist <- data %>%
+  filter(group > 0)
+
+# ------------------------------------------------------------------------------
+# Joint F-tests for equality of means across groups/cohorts
+# ------------------------------------------------------------------------------
+
+vars <- c("facnum", "semp", "urba", "imps", "litr",
+          "opo5r", "opu5r", "ipo5r", "ipu5r", "iplos", "delr")
+
+joint_equality <- lapply(vars, function(v) {
+  model <- lm(as.formula(paste(v, "~ factor(group)")), data = df_dist)
+  pval <- anova(model)[["Pr(>F)"]][1]
+  data.frame(variable = v, p_value = round(pval, 3))}) %>% 
+  bind_rows()
+
+# Interpretation:
+# Rejection -> observable jointly predict timing
+# Non-rejection -> no evidence of selection on these observable
+
+print(joint_equality)
+write_xlsx(joint_equality, "./output/tbl_b_13_test_joint_equality.xlsx")
+
+# ------------------------------------------------------------------------------
+# Cohort-specific tests for equality of means using later-treated (not-yet + last) groups
+# ------------------------------------------------------------------------------
+
+run_test <- function(data, treat_group, time_period) {
+  data %>%
+    filter(time == time_period) %>%
+    filter(group >= treat_group) %>%   # treated + not-yet-treated
+    mutate(treated = ifelse(group == treat_group, 1, 0))}
+
+df_dist_4 <- run_test(df_dist, 4, 3)  # Q2 2016
+df_dist_5 <- run_test(df_dist, 5, 4)  # Q3 2016
+df_dist_6 <- run_test(df_dist, 6, 5)  # Q4 2016
+df_dist_8 <- run_test(df_dist, 8, 7)  # Q2 2017
+
+vars <- c("facnum", "semp", "urba", "imps", "litr",
+          "opo5r", "opu5r", "ipo5r", "ipu5r", "iplos", "delr")
+
+get_stats <- function(df) {
+  res <- sapply(vars, function(v) {
+    treated_vals <- df[df$treated == 1, ][[v]]
+    control_vals <- df[df$treated == 0, ][[v]]
+    mean_treated <- mean(treated_vals, na.rm = TRUE)
+    mean_control <- mean(control_vals, na.rm = TRUE)
+    pval <- t.test(treated_vals, control_vals)$p.value
+    c(mean_treated, mean_control, pval)})
+  t(res)}
+
+res_4 <- get_stats(df_dist_4)
+res_5 <- get_stats(df_dist_5)
+res_6 <- get_stats(df_dist_6)
+res_8 <- get_stats(df_dist_8)
+
+results <- cbind(
+  res_4[,1], res_4[,2], res_4[,3],
+  res_5[,1], res_5[,2], res_5[,3],
+  res_6[,1], res_6[,2], res_6[,3],
+  res_8[,1], res_8[,2], res_8[,3])
+
+results <- as.data.frame(results)
+results$Variable <- vars
+
+# Reorder columns
+results <- results[, c("Variable", names(results)[1:12])]
+
+# Define variable groups
+covariates_pct <- c("semp", "urba", "imps", "litr")       # percentages -> ×100
+covariates_raw <- c("facnum")                             # counts -> no scaling
+outcomes0      <- c("opo5r", "opu5r", "ipo5r", "ipu5r")   # no decimals
+outcomes1      <- c("iplos")                              # 1 decimal
+outcomes2      <- c("delr")                               # percentages -> ×100
+
+
+# Identify mean columns
+mean_cols <- c(2,3,5,6,8,9,11,12)
+
+# Apply formatting row by row
+for (i in 1:nrow(results)) {
+  var <- results$Variable[i]
+  
+  vals <- as.numeric(results[i, mean_cols])
+  
+  if (var %in% covariates_pct) {
+    vals <- round(vals*100, 0)
+  } else if (var %in% covariates_raw) {
+    vals <- round(vals, 1)
+  } else if (var %in% outcomes0) {
+    vals <- round(vals, 0)
+  } else if (var %in% outcomes1) {
+    vals <- round(vals, 1)
+  } else if (var %in% outcomes2) {
+    vals <- round(vals*100, 0)}
+
+  results[i, mean_cols] <- vals}
+
+# Format p-values (3 decimals, no scientific notation)
+format_p <- function(p) {
+  ifelse(p < 0.001, "<0.001", sprintf("%.3f", as.numeric(p)))}
+
+p_cols <- c(4, 7, 10, 13)
+results[, p_cols] <- lapply(results[, p_cols], format_p)
+
+colnames(results) <- c(
+  "Variable",
+  "G4 (treated)", "G5,6,8,9 (control)", "p-value (Q2/2016)",
+  "G5 (treated)", "G6,8,9 (control)", "p-value (Q3/2016)",
+  "G6 (treated)", "G8,9 (control)", "p-value (Q4/2016)",
+  "G8 (treated)", "G9 (control)", "p-value (Q2/2017)")
+
+results
+write_xlsx(results, "./output/tbl_b_13_test_group_specific.xlsx")
+
+# ------------------------------------------------------------------------------
+# Joint F-test for selection on observables
+# ------------------------------------------------------------------------------
+
+df_dist <- data %>% 
+  filter(group > 0 & quarter == "2016.2") %>%
+  dplyr::select(group, province, district, pnum, dnum, event,
+         facnum, semp, urba, imps, litr,
+         opo5r, opu5r, ipo5r, ipu5r, iplos, delr)
+
+# Run regression
+timing_reg <- lm(group ~ facnum + semp + urba + imps + litr, 
+                 data = df_dist)
+summary(timing_reg)
+
+coef_table <- tidy(timing_reg, conf.int = TRUE)
+model_stats <- glance(timing_reg)
+
+wb <- createWorkbook()
+addWorksheet(wb, "Coefficients")
+writeData(wb, "Coefficients", coef_table)
+addWorksheet(wb, "Model Stats")
+writeData(wb, "Model Stats", model_stats)
+saveWorkbook(wb, "./output/tbl_b_14_test_treatment_timing.xlsx",
+             overwrite = TRUE)
+
+```
+<br>
+
+# Figure 1-A. Population coverage by social health protection schemes from 2008 to 2021
+<br>
+```{r fig_01_a, warning=FALSE}
+
+data.shp <- read_excel("./data import/lao_shp_schemes.xlsx", 
+                       sheet = "final") # district
+data.shp <- data.shp %>% 
+  pivot_longer(cols = -"scheme", names_to = "year", values_to = "population")
+
+tpop <- data.shp %>%
+  filter(scheme == "Total population") %>%
+  dplyr::select(-scheme) %>%
+  rename(total_population = population, year = year)
+
+data.shp <- data.shp %>%
+  filter(scheme != "Total population") %>%
+  left_join(tpop, by = "year") %>%
+  mutate(pct = population / total_population)
+
+data.shp %>% distinct(scheme) %>% put()
+
+scheme_list <- c("Formal sector Defense",
+                 "Formal sector Civil servants",
+                 "Formal sector Private employees",
+                 "Informal sector Health Equity Fund for the poor (HEF)",
+                 "Free mothers (FMAT)",
+                 "Free children under 5 (FCU5)",
+                 "Informal sector Community-based health insurance (CBHI)",
+                 "Informal sector National Health Insurance (NHI)")
+scheme_label <- c("Formal sector: Military and Police",
+                  "Formal sector: Civil servants (LSSO-SASS)",
+                  "Formal sector: Private enterprise workers (LSSO-SSO)", 
+                  "Informal sector: Health Equity Fund for the poor (HEF)",
+                  "Informal sector: Free maternity (FMAT)",
+                  "Informal sector: Free children under five (FCU5)",
+                  "Informal sector: Community-based health insurance (CBHI)",
+                  "Informal sector: National Health Insurance (NHI)")
+
+data.shp <- data.shp %>%
+  mutate(scheme2 = factor(scheme, 
+                          levels = scheme_list, 
+                          labels = scheme_label))
+
+write_xlsx(data.shp, "./output/fig_01_population_scheme.xlsx")
+
+hiro <- met.brewer("Hiroshige") # Red -> Blue
+mypalette <- hiro[c(1:5, 7:9)]
+#hoku <- met.brewer("Hokusai3")[2]
+#paqu <- met.brewer("Paquin")[7]
+#paqu <- met.brewer("Paquin")[8]
+vgh3 <- met.brewer("VanGogh3")[3]
+mypalette[1] <- vgh3
+tpopn <- 7337783
+
+# plot -------------------------------------------------------------------------
+
+plot_pop <- ggplot(
+  data.shp, aes(fill = scheme2, y = population, x = year)) + 
+  geom_bar(position = position_stack(reverse = TRUE), 
+           color = "grey25", stat = "identity", lwd = 0.2) +
+  scale_y_continuous(limits = c(0, tpopn), expand = c(0, 0), 
+                     labels = scales::comma) +
+  scale_fill_manual(values = rev(mypalette), breaks = scheme_label) +
+  ylab("Population") + 
+  xlab("Year") +
+  annotate("text", x = 7.5, y = 2900000, label = "33%", size = 3.3,
+           family = "Source Sans 3") +
+  geom_segment(aes(x = 7.7, y = 2650000, xend = 8, yend = 2400000),
+               arrow = arrow(type = "closed", length = unit(0.05, "in")),
+               color = "grey30") +
+  annotate("text", x = 9.5, y = 7150000, label = "93%", size = 3.3,
+           family = "Source Sans 3") +
+  geom_segment(aes(x = 9.7, y = 6900000, xend = 10, yend = 6650000),
+               arrow = arrow(type = "closed", length = unit(0.05, "in")),
+               color = "grey30") +
+  ggtitle("(a) Population coverage by health financing scheme, 2008-2021") +
+  theme_light() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_blank(),  
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title.position = "plot",
+    plot.title = element_markdown(hjust = 0.7,          # fully left align
+                                  size = 11, colour = "black",
+                                  margin = margin(b = 20)),
+    plot.margin = margin(t = 0.1, r = 0.05, b = 0.1, l = 0.1, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 10.5, 
+                                margin = margin(0.15, 0, 0, 0, "in")),
+    axis.title.y = element_text(color = "black", vjust = 3, size = 10.5),
+    axis.ticks = element_line(color = "black"),
+    axis.text.y = element_text(color = "black", size = 10.5),
+    axis.text.x = element_text(color = "black", size = 10, 
+                               angle = 45, vjust = 0.75, hjust = 0.75),
+    legend.position = 'bottom',
+    legend.box = "vertical",          # put legend items in a vertical box
+    legend.box.just = "top",
+    legend.title = element_blank(),
+    legend.key.size = unit(0.2, "in"),
+    legend.key.spacing.y = unit(0.025, "in"),
+    legend.text = element_text(size = 10)) + 
+  guides(fill = guide_legend(ncol = 1, reverse = TRUE, byrow = TRUE))
+
+# Vector file
+pdf("./graph/fig_01_population_scheme.pdf", width = 6.3, height = 6.6)
+print(plot_pop)
+dev.off()
+
+# plot 2 (y-axis unit million) -------------------------------------------------
+
+tpopn <- 7.337783
+data.shp_v <- data.shp %>%
+  mutate(population = population / 1000000,
+         total_population = total_population / 1000000)
+  
+plot_pop_v <- ggplot(
+  data.shp_v, aes(fill = scheme2, y = population, x = year)) + 
+  geom_bar(position = position_stack(reverse = TRUE), 
+           color = "grey25", stat = "identity", lwd = 0.2) +
+  scale_y_continuous(limits = c(0, tpopn), expand = c(0, 0), 
+                     labels = scales::comma) +
+  scale_fill_manual(values = rev(mypalette), breaks = scheme_label) +
+  ylab("Population (million)") + 
+  xlab("Year") +
+  annotate("text", x = 7.5, y = 2.90, label = "33%", size = 3.3,
+           family = "Source Sans 3") +
+  geom_segment(aes(x = 7.7, y = 2.65, xend = 8, yend = 2.40),
+               arrow = arrow(type = "closed", length = unit(0.05, "in")),
+               color = "grey30") +
+  annotate("text", x = 9.5, y = 7.15, label = "93%", size = 3.3,
+           family = "Source Sans 3") +
+  geom_segment(aes(x = 9.7, y = 6.90, xend = 10, yend = 6.65),
+               arrow = arrow(type = "closed", length = unit(0.05, "in")),
+               color = "grey30") +
+  ggtitle("(a) Population coverage by health financing scheme, 2008-2021") +
+  theme_light() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_blank(),  
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title.position = "plot",
+    plot.title = element_markdown(hjust = 0.7,          # fully left align
+                                  size = 11, colour = "black",
+                                  margin = margin(b = 20)),
+    plot.margin = margin(t = 0.1, r = 0.05, b = 0.05, l = 0.2, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 10.5, 
+                                margin = margin(0.15, 0, 0, 0, "in")),
+    axis.title.y = element_text(color = "black", vjust = 3, size = 10.5),
+    axis.ticks = element_line(color = "black"),
+    axis.text.y = element_text(color = "black", size = 10.5),
+    axis.text.x = element_text(color = "black", size = 10, 
+                               angle = 45, vjust = 0.75, hjust = 0.75),
+    legend.position = 'bottom',
+    legend.box = "vertical",          # put legend items in a vertical box
+    legend.box.just = "top",
+    legend.title = element_blank(),
+    legend.key.size = unit(0.2, "in"),
+    legend.key.spacing.y = unit(0.025, "in"),
+    legend.text = element_text(size = 10)) + 
+  guides(fill = guide_legend(ncol = 1, reverse = TRUE, byrow = TRUE))
+
+# Vector file
+pdf("./graph/fig_01_population_scheme_v.pdf", width = 6.1, height = 6.6)
+print(plot_pop_v)
+dev.off()
+
+```
+<br>
+
+# Figure 1-B. Timeline of NHI expansion from 2015 to 2019
+<br>
+```{r fig_01_b, warning=FALSE}
+
+data.cln <- read_excel("./data export/02_clean_8_cln_q_dl.xlsx") # district
+
+data.cln %>%
+ filter(faclevel != "PH") %>%
+ summarise(count = n_distinct(district)) %>%
+ put()
+
+data.cln %>%
+ filter(faclevel != "PH") %>%
+ filter(pnum != 1) %>%
+ summarise(count = n_distinct(district)) %>%
+ put()
+
+data.num <- data.cln %>%
+ filter(pnum != 1) %>%
+ filter(faclevel != "PH") %>%
+ put()
+
+data.num <- data.num %>%
+  dplyr::select(quarter, pnum, treat, group) %>%
+  mutate(quarter = as.factor(quarter),
+         group = as.factor(group))
+unique(data.num$group) %>% put()
+str(data.num) %>% put()
+
+prov_label <- c("Q3 2016 (Attapeu, Luang Namtha, Xaysomboun)",
+                "Q4 2016 (Salavanh)",
+                "Q1 2017 (Bolikhamxay, Houaphanh, Xieng Khouang, Oudomxay, Phongsaly)",
+                "Q2 2017 (Sekong)",
+                "Q3 2017 (Savannakhet, Champasak)",
+                "Q4 2017 (Bokeo, Khammouane, Luang Prabang, Sayabouly, Vientiane)")
+
+data.num <- data.num %>%
+  mutate(
+    group = factor(group, labels = c("Q3 2016", "Q4 2016", "Q1 2017", 
+                                     "Q2 2017", "Q3 2017", "Q4 2017")),
+    quarter = factor(quarter, labels = c("Q4.2015", "Q1.2016", "Q2.2016", 
+                                         "Q3.2016", "Q4.2016", "Q1.2017",
+                                         "Q2.2017", "Q3.2017", "Q4.2017", 
+                                         "Q1.2018", "Q2.2018", "Q3.2018", 
+                                         "Q4.2018", "Q1.2019")),
+    group2 = factor(group, labels = prov_label))
+
+naqrt <- c("Q1.2015", "Q2.2015", "Q3.2015", "Q4.2015", "Q1.2016", "Q2.2016")
+total <- data.num %>%
+  group_by(quarter) %>%
+  summarise(count = sum(treat)) %>%
+  mutate(count = replace(count, quarter %in% naqrt, NA))
+
+mypalette <- met.brewer("Hokusai3", 6, "discrete") # Paquin / Hiroshige
+names(mypalette) <- prov_label
+
+# Legend with province names (aggregated blocked), bar outline
+data.num2 <- data.num %>%
+  group_by(group2, quarter) %>%
+  summarise(count = sum(treat)) %>%
+  setNames(c("intv_group", "quarter", "count"))
+
+write_xlsx(data.num2, "./output/fig_01_district_num.xlsx")
+
+plot_district <- ggplot(
+  data.num2, aes(fill = intv_group, y = count, x = quarter)) + 
+  geom_bar(position = position_stack(reverse = TRUE), 
+           color = "grey25", stat = "identity", lwd = 0.2) +
+  geom_text(aes(x = quarter, y = count + 5, label = count, fill = NULL), 
+            data = total, size = 3, fontface = "italic") +
+  scale_y_continuous(limits = c(0, 155), expand = c(0, 0)) +
+  scale_fill_manual(
+    values = mypalette,
+    breaks = prov_label) +
+  labs(fill = NULL,
+       y = "Number of districts", 
+       x = "Quarter") +
+  ggtitle("(b) Timeline of NHI expansion, 2015-2019") +
+  theme_light() +
+  theme(
+    text = element_text(family = "Source Sans 3"), # Font style
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title.position = "plot",
+    plot.title = element_markdown(
+      hjust = 0.6,          # fully left align
+      size = 11,
+      colour = "black",
+      margin = margin(b = 20)),
+    plot.margin = margin(t = 0.1, r = 0.5, b = 0.1, l = 0.1, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 10.5, 
+                                margin = margin(t = 0.15, unit = "in")),
+    axis.title.y = element_text(color = "black", vjust = 2, size = 10.5),
+    axis.ticks = element_line(color = "black"),
+    axis.text.y = element_text(color = "black", size = 10.5),
+    axis.text.x = element_text(color = "black", size = 10, 
+                               angle = 45, vjust = 0.75, hjust = 0.75),
+    # legend.title = element_text(color = "black", size = 10, 
+    #                             margin = margin(b = 0.07, unit = "in")),
+    legend.position = 'bottom',
+      legend.box = "vertical",          # put legend items in a vertical box
+  legend.box.just = "top",
+    legend.key.size = unit(0.2, "in"),
+    legend.key.spacing.y = unit(0.025, "in"),
+    legend.text = element_text(size = 10.5)) +
+guides(fill = guide_legend(ncol = 1, reverse = FALSE, byrow = TRUE))
+
+# Vector file
+pdf("./graph/fig_01_district_num.pdf", width = 5.5, height = 6)
+print(plot_district)
+dev.off()
+
+# Combine graphs
+plot_pop_clean  <- plot_pop  + theme(plot.margin = margin(r = 30))
+plot_dist_clean <- plot_district + theme(
+  legend.box.margin = margin(t = -35))
+plot_pop_dist <- plot_pop_clean + plot_dist_clean + plot_layout(ncol = 2)
+
+# Save
+pdf("./graph/fig_01_pop_district.pdf", width = 10, height = 6.5)
+print(plot_pop_dist)
+dev.off()
+
+```
+<br>
+
+# Figure 1-B. Choropleth map
+<br>
+```{r fig_01_b, warning=FALSE}
+
+# Source
+# https://data.humdata.org/dataset
+
+# Label and color scheme
+prov_label <- c("Q3 2016 (Attapeu, Luang Namtha, Xaysomboun)",
+                "Q4 2016 (Salavanh)",
+                "Q1 2017 (Bolikhamxay, Houaphanh, Xieng Khouang, Oudomxay, Phongsaly)",
+                "Q2 2017 (Sekong)",
+                "Q3 2017 (Savannakhet, Champasak)",
+                "Q4 2017 (Bokeo, Khammouane, Luang Prabang, Sayabouly, Vientiane)")
+
+hiro <- met.brewer("Hiroshige") # Red -> Blue
+mypalette <- hiro[c(2, 2, 3, 5, 6, 7)]
+mypalette[1] <- "#95c36e" # "#d8d97a"
+mypalette[2] <- "#f78462" # "#d8d97a"
+mypalette[3] <- "#fbc06a" # Hiroshige 3,4 between "#f7aa58" "#ffd06f"
+mypalette[6] <- "#64aac9" # Hiroshige 7,8 between "#f7aa58" "#ffd06f", 37.5%
+
+names(mypalette) <- prov_label
+map_palette <- c(mypalette, "Never-treated province (Vientiane Capital)" = "grey85")
+
+# Geospatial data
+lao_admin2 <- st_read("data import/map_boundaries.shp/lao_admin2.shp")
+thailand <- st_read("data import/map_boundaries.shp/tha_admin0.shp")
+vietnam  <- st_read("data import/map_boundaries.shp/vnm_admin0.shp")
+china  <- st_read("data import/map_boundaries.shp/chn_admbnda_adm0_ocha_2020.shp")
+cambodia  <- st_read("data import/map_boundaries.shp/khm_admin0.shp")
+myanmar  <- st_read("data import/map_boundaries.shp/mmr_admin0.shp")
+
+# Match CRS to Laos
+thailand <- st_transform(thailand, st_crs(lao_admin2))
+vietnam  <- st_transform(vietnam,  st_crs(lao_admin2))
+china  <- st_transform(china,  st_crs(lao_admin2))
+cambodia  <- st_transform(cambodia,  st_crs(lao_admin2))
+myanmar  <- st_transform(myanmar,  st_crs(lao_admin2))
+
+sf_use_s2(FALSE)
+vietnam <- st_make_valid(vietnam)
+cambodia <- st_make_valid(cambodia)
+
+thai_border <- st_union(thailand)
+viet_border <- st_union(vietnam)
+camb_border <- st_union(cambodia)
+chin_border <- st_union(china)
+myan_border <- st_union(myanmar)
+
+viet_border_s <- st_simplify(viet_border, dTolerance = 0.01)
+
+laos_border <- st_union(lao_admin2)
+thai_border_clean <- st_difference(thai_border, laos_border)
+viet_border_clean <- st_difference(viet_border_s, laos_border)
+camb_border_clean <- st_difference(camb_border, laos_border)
+chin_border_clean <- st_difference(chin_border, laos_border)
+myan_border_clean <- st_difference(myan_border, laos_border)
+sf_use_s2(TRUE)  # turn it back on
+
+country_labels <- data.frame(
+  country = c("Thailand", "Vietnam"),
+  x = c(101.5, 105.5),  # longitude (x-axis)
+  y = c(15.5, 21.7))    # latitude  (y-axis)
+
+laos_bbox <- st_bbox(lao_admin2)
+label_size <- 2
+
+# Laos data
+lao_map <- lao_admin2 %>%
+  arrange(adm2_pcode) %>%
+  mutate(
+    group_num = case_when(
+      adm1_pcode %in% c("LA17", "LA03", "LA18") ~ 4,
+      adm1_pcode == "LA14" ~ 5,
+      adm1_pcode %in% c("LA11", "LA07", "LA09", "LA04", "LA02") ~ 6,
+      adm1_pcode == "LA15" ~ 7,
+      adm1_pcode %in% c("LA13", "LA16") ~ 8,
+      adm1_pcode %in% c("LA05", "LA12", "LA06", "LA08", "LA10") ~ 9,
+      TRUE ~ NA_real_),
+    group = case_when(
+      is.na(group_num) ~ "Never-treated province (Vientiane Capital)",
+      TRUE ~ prov_label[group_num - 3]),
+    group = factor(
+      group, levels = c(prov_label, "Never-treated province (Vientiane Capital)"))) %>%
+  dplyr::select(-group_num)
+
+# Plot
+plot_map <- ggplot() +
+  geom_sf(data = chin_border_clean, fill = "grey97", color = NA, linewidth = 0) +
+  geom_sf(data = thai_border_clean, fill = "grey97", color = "grey70", linewidth = 0.2) +
+  geom_sf(data = viet_border_clean, fill = "grey97", color = "grey70", linewidth = 0.2) +
+  geom_sf(data = camb_border_clean, fill = "grey97", color = "grey70", linewidth = 0.2) +  
+  geom_sf(data = myan_border_clean, fill = "grey97", color = "grey70", linewidth = 0.2) +
+  geom_sf(data = lao_map, aes(fill = group), color = "black", linewidth = 0.2) +
+  scale_fill_manual(values = map_palette, name = NULL, drop = FALSE) +
+  coord_sf(xlim = c(laos_bbox["xmin"] - 0.2, laos_bbox["xmax"] + 0.2),
+           ylim = c(laos_bbox["ymin"] - 0.2, laos_bbox["ymax"] + 0.2),
+           expand = FALSE) +
+  theme_light() +
+  theme(
+    text = element_text(family = "Source Sans 3"), # Font style
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.ticks.length = unit(0, "in"),
+    axis.title = element_blank(),
+    axis.line = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(colour = "grey75", fill = NA, linewidth = 0.1),
+    legend.position = "none",
+    plot.margin = margin(t = 0.1, r = 0.1, b = 0.1, l = 0.1, unit = "in"))
+
+plot_map
+
+# Save
+plot_map_alone <- plot_map +
+  geom_text(data = country_labels, aes(x = x, y = y, label = country),
+            color = "grey40", size = 3.5, family = "Source Sans 3", 
+            fontface = "italic")
+  
+pdf("./graph/fig_01_map_alone.pdf", width = 5.3, height = 6.1)
+print(plot_map_alone)
+dev.off()
+
+# Add legend and title
+plot_map1 <- plot_map_alone + 
+  ggtitle("(b) Timing of NHI introduction across provinces and districts, 2016-2017") +
+  theme(
+    plot.title = element_markdown(hjust = 0.6, # fully left align
+                                  size = 11, colour = "black", 
+                                  margin = margin(b = 20)),
+    legend.position = "bottom",
+    legend.box      = "vertical",
+    legend.box.just = "top",
+    legend.key.size = unit(0.2, "in"),
+    legend.key.spacing.y = unit(0.025, "in"),
+    legend.text     = element_text(size = 10),
+    plot.margin = margin(t = 0.1, r = 1.1, b = 0, l = 1.5, unit = "in")) +
+  guides(fill = guide_legend(ncol = 1, reverse = FALSE, byrow = TRUE))
+
+# Standalone graph with legend and title
+plot_map2 <- plot_map1 +
+  theme(
+    plot.margin = margin(t = 0, r = 0.2, b = 0, l = 0.2, unit = "in"),
+    plot.title = element_markdown(hjust = 0.6, # fully left align
+                                  size = 11, colour = "black",
+                                  margin = margin(t = 1.5, b = 15))) 
+
+pdf("./graph/fig_01_map.pdf", width = 5.4, height = 7.8)
+print(plot_map2)
+dev.off()
+
+# Combine graphs (patchwork package) - horizontal
+plot_pop_clean  <- plot_pop  + theme(plot.margin = margin(r = 27)) # legend.justification = "left"
+plot_map_clean <- plot_map1 +
+  theme(legend.box.margin = margin(t = -16))
+
+plot_pop_map <- plot_pop_clean + plot_map_clean + plot_layout(ncol = 2) +
+  inset_element(plot_map_alone, left = -0.5, right = 1.4, top = 1.05, bottom = -0.22)
+
+# Save
+pdf("./graph/fig_01_pop_map.pdf", width = 10.5, height = 6.4)
+print(plot_pop_map)
+dev.off()
+
+# Combine graphs (patchwork package) - horizontal_v2 (reduced label) -> not complete
+# plot_pop_clean  <- plot_pop_v  + theme(plot.margin = margin(r = 27)) # legend.justification = "left"
+# plot_map_clean <- plot_map1 +
+#   theme(legend.box.margin = margin(t = -16))
+# 
+# plot_pop_map <- plot_pop_clean + plot_map_clean + 
+#   plot_layout(ncol = 2, widths = c(1, 1)) +
+#   inset_element(plot_map_alone, left = -0.5, right = 1.4, top = 1.05, bottom = -0.22)
+# 
+# # Save
+# pdf("./graph/fig_01_pop_map_h_v1.pdf", width = 10.5, height = 6.4)
+# print(plot_pop_map)
+# dev.off()
+# 
+# # Combine graphs (patchwork package) - vertical
+# plot_pop_clean  <- plot_pop_v +
+#   theme(plot.title = element_markdown(
+#     hjust = 0.7, size = 11, colour = "black",
+#     margin = margin(b = 0.165, unit = "in")),
+#     legend.text = element_text(size = 10.5),
+#     legend.box.margin = margin(t = -0.1, l = -1, unit = "in"),
+#     plot.margin = margin(0, 0, 0.245, 0.01, unit = "in"))
+# 
+# plot_map_clean <- plot_map1 +
+#   theme(plot.title = element_markdown(
+#     hjust = 0.6, size = 11, colour = "black",
+#     margin = margin(b = 0.165, l = -0.1, unit = "in")),
+#     legend.text = element_text(size = 10.5),
+#     legend.box.margin = margin(t = -0.07, l = -0.08, unit = "in"),
+#     plot.margin = margin(0, 0, 0, 0, unit = "in"))
+# 
+# #plot_pop_map_v <- plot_pop_clean + plot_map_clean + plot_layout(nrow = 2)
+# plot_pop_map_v <- plot_pop_clean / plot_map_clean + #v3
+#   #plot_layout(heights = c(0.8, 1.2))
+#   #plot_layout(heights = c(0.8, 1.27)) #v3
+#   plot_layout(heights = c(0.8, 1.3)) #v1, v4
+#   
+# # Save
+# #pdf("./graph/fig_01_pop_map_v.pdf", width = 11, height = 16)
+# #pdf("./graph/fig_01_pop_map_v2.pdf", width = 5, height = 13.75)
+# #pdf("./graph/fig_01_pop_map_v3.pdf", width = 5, height = 14.25)
+# #pdf("./graph/fig_01_pop_map_v4.pdf", width = 5.1, height = 14.4)
+# pdf("./graph/fig_01_pop_map_v1.pdf", width = 5.12, height = 14.35)
+# print(plot_pop_map_v)
+# dev.off()
+
+# Combine graphs (cowplot package) - vertical
+plot_pop_clean <- plot_pop_v +
+  theme(plot.title = element_markdown(
+    hjust = 0.7, size = 11, colour = "black", 
+    margin = margin(b = 0.165, unit = "in")),
+    legend.text = element_text(size = 10.5),
+    legend.box.margin = margin(t = -0.1, l = -0.1, unit = "in"),
+    plot.margin = margin(0, 0, 0.245, 0.01, unit = "in"))
+
+plot_map_clean <- plot_map1 +
+  theme(plot.title = element_markdown(
+    hjust = 0.6, size = 11,
+    colour = "black", margin = margin(b = 0.165, unit = "in")),
+    legend.text = element_text(size = 10.5),
+    legend.box.margin = margin(t = -0.07, l = 0.65, unit = "in"),
+    plot.margin = margin(0, 0, 0, 0.01, unit = "in"))
+
+plot_pop_map_v2 <- ggdraw() +
+  theme(plot.background = element_rect(fill = "white", colour = NA)) +
+  draw_plot(plot_pop_clean, x = 0.02, y = 0.545, 
+            width = 0.97, height = 0.45) +
+  draw_plot(plot_map_clean, x = 0.02, y = 0.00,
+            width = 0.96, height = 0.545)
+
+pdf("./graph/fig_01_pop_map_v2.pdf", 
+    width = 5.12, height = 14.35)
+print(plot_pop_map_v2)
+dev.off()
+
+
+```
+<br>
+
+# Figure 2. Analysis Framework
+<br>
+```{r fig_02, warning=FALSE}
+
+fig_font <- "Source Sans 3"
+
+inner_line <- 0.275
+outer_line <- 0.4
+
+# Column positions
+x0 <- 0.5
+
+w_type <- 1.75
+w_prov <- 1.75
+w_dist <- 1.75
+w_group <- 2.8
+w_time <- 1.8
+
+x_type_min <- x0
+x_type_max <- x_type_min + w_type
+x_type_mid <- mean(c(x_type_min, x_type_max))
+
+x_int_min <- x_type_min
+x_int_max <- x_type_mid
+
+x_con_min <- x_type_mid
+x_con_max <- x_type_max
+
+x_prov_min <- x_type_max
+x_prov_max <- x_prov_min + w_prov
+
+x_dist_min <- x_prov_max
+x_dist_max <- x_dist_min + w_dist
+
+x_group_min <- x_dist_max
+x_group_max <- x_group_min + w_group
+
+time_start <- x_group_max
+
+time_x <- tibble(
+  t = 1:9,
+  xmin = time_start + (0:8) * w_time,
+  xmax = time_start + (1:9) * w_time,
+  xmid = (xmin + xmax) / 2)
+
+x_end <- max(time_x$xmax)
+
+# Row positions, controlled by row_h
+row_h <- 0.65
+
+y_body_top <- 5.5
+
+y_rows <- tibble(
+  row = 1:5,
+  ymax = y_body_top - (0:4) * row_h,
+  ymin = ymax - row_h,
+  ymid = (ymin + ymax) / 2)
+
+y_t_min <- y_body_top
+y_t_max <- y_t_min + row_h
+y_t_mid <- mean(c(y_t_min, y_t_max))
+
+y_q_min <- y_t_max
+y_q_max <- y_q_min + row_h
+y_q_mid <- mean(c(y_q_min, y_q_max))
+
+y_year_min <- y_q_max
+y_year_max <- y_year_min + row_h
+y_year_mid <- mean(c(y_year_min, y_year_max))
+
+y_bottom <- min(y_rows$ymin)
+y_top <- y_year_max
+
+# Data
+group_df <- tibble(
+  group = c(4, 5, 6, 8, 9),
+  province = c(3, 1, 5, 2, 5),
+  district = c(15, 7, 37, 24, 46),
+  ymid = y_rows$ymid)
+
+status_df <- crossing(
+  group = c(4, 5, 6, 8, 9),
+  t = 1:9) %>%
+  mutate(
+    status = case_when(
+      group == 4 & t >= 4 ~ "Treated",
+      group == 5 & t >= 5 ~ "Treated",
+      group == 6 & t >= 6 ~ "Treated",
+      group == 8 & t >= 8 ~ "Treated",
+      group == 9 & t == 9 ~ "Treated",
+      group == 9 & t < 9 ~ "Last",
+      TRUE ~ "Not-yet"),
+    fill = case_when(
+      status == "Treated" ~ "#C6E0B4",
+      status == "Not-yet" ~ "#F8CBAD",
+      status == "Last" ~ "#D6D6D6"),
+    txt = case_when(
+      status == "Treated" ~ "#385723",
+      status == "Not-yet" ~ "#833C0C",
+      TRUE ~ "black")) %>%
+  left_join(group_df %>% dplyr::select(group, ymid), by = "group") %>%
+  left_join(time_x, by = "t")
+
+# Plot -------------------------------------------------------------------------
+
+plot_frame <- ggplot() +
+
+  annotate("rect", xmin = x_type_min, xmax = x_group_max, 
+           ymin = y_q_min, ymax = y_year_max, fill = "white", color = "black",
+           linewidth = inner_line) +
+  annotate("rect", xmin = time_x$xmin[1], xmax = time_x$xmax[1], 
+           ymin = y_year_min, ymax = y_year_max, fill = "white", color = "black",
+           linewidth = inner_line) +
+  annotate("rect", xmin = time_x$xmin[2], xmax = time_x$xmax[5], 
+           ymin = y_year_min, ymax = y_year_max, fill = "white", color = "black",
+           linewidth = inner_line) +
+  annotate("rect", xmin = time_x$xmin[6], xmax = time_x$xmax[9],
+           ymin = y_year_min, ymax = y_year_max, fill = "white", color = "black",
+           linewidth = inner_line) +
+  annotate("text", x = time_x$xmid[1], y = y_year_mid, label = "2015",
+           family = fig_font, size = 3) +
+  annotate("text", x = mean(c(time_x$xmin[2], time_x$xmax[5])), y = y_year_mid,
+           label = "2016", family = fig_font, size = 3) +
+  annotate("text", x = mean(c(time_x$xmin[6], time_x$xmax[9])), y = y_year_mid,
+           label = "2017", family = fig_font, size = 3) +
+  annotate("rect", xmin = time_x$xmin, xmax = time_x$xmax, ymin = y_q_min,
+           ymax = y_q_max, fill = "white", color = "black", linewidth = inner_line) +
+  annotate("text", x = time_x$xmid, y = y_q_mid,
+           label = c("Q4", "Q1", "Q2", "Q3", "Q4", "Q1", "Q2", "Q3", "Q4"),
+           family = fig_font, size = 3) +
+  annotate("rect", xmin = time_x$xmin, xmax = time_x$xmax, ymin = y_t_min,
+           ymax = y_t_max, fill = "white", color = "black", linewidth = inner_line) +
+  annotate("text", x = time_x$xmid, y = y_t_mid, label = paste0("italic(t)==", 1:9),
+           family = fig_font, size = 3, parse = TRUE)+
+  annotate("rect", xmin = c(x_type_min, x_prov_min, x_dist_min, x_group_min),
+           xmax = c(x_type_max, x_prov_max, x_dist_max, x_group_max),
+           ymin = y_t_min, ymax = y_t_max, fill = "white", color = "black",
+           linewidth = inner_line) +
+  annotate("text", x = c(mean(c(x_type_min, x_type_max)),
+                         mean(c(x_prov_min, x_prov_max)),
+                         mean(c(x_dist_min, x_dist_max))),
+           y = y_t_mid, label = c("Type", "Province", "District"), 
+           family = fig_font, size = 3) +
+  annotate("text", x = x_group_max - 0.12, y = y_t_mid, 
+           label = "'Time ('*italic(t)*')'", family = fig_font, size = 3,
+           parse = TRUE, hjust = 1) +
+  
+  # Type, separate merged columns
+  annotate("rect", xmin = x_int_min, xmax = x_int_max, ymin = y_rows$ymin[4],
+           ymax = y_rows$ymax[1], fill = "white", color = "black", 
+           linewidth = inner_line) +
+  annotate("rect", xmin = x_con_min, xmax = x_con_max, ymin = y_rows$ymin[5],
+           ymax = y_rows$ymax[2], fill = "white", color = "black", 
+           linewidth = inner_line) +
+  annotate("text", x = mean(c(x_int_min, x_int_max)), 
+           y = mean(c(y_rows$ymin[4], y_rows$ymax[1])),
+           label = "Intervention", angle = 90, family = fig_font, size = 3) +
+  annotate("text", x = mean(c(x_con_min, x_con_max)), 
+           y = mean(c(y_rows$ymin[5], y_rows$ymax[2])), label = "Control",
+           angle = 90, family = fig_font, size = 3) +
+
+  # empty cell beside Intervention
+  annotate("rect", xmin = x_con_min, xmax = x_con_max, ymin = y_rows$ymin[1],
+           ymax = y_rows$ymax[1], fill = "white", color = "black",
+           linewidth = inner_line) +
+  
+  # empty cell beside Control
+  annotate("rect", xmin = x_int_min, xmax = x_int_max, ymin = y_rows$ymin[5],
+           ymax = y_rows$ymax[5], fill = "white", color = "black", 
+           linewidth = inner_line) +
+  annotate("rect", xmin = x_prov_min, xmax = x_prov_max, ymin = y_rows$ymin,
+           ymax = y_rows$ymax, fill = "white", color = "black", linewidth = inner_line) +
+  annotate("rect", xmin = x_dist_min, xmax = x_dist_max, ymin = y_rows$ymin,
+           ymax = y_rows$ymax, fill = "white", color = "black", linewidth = inner_line) +
+  annotate("rect", xmin = x_group_min, xmax = x_group_max, ymin = y_rows$ymin,
+           ymax = y_rows$ymax, fill = "white", color = "black", linewidth = inner_line) +
+  annotate("text", x = mean(c(x_prov_min, x_prov_max)), y = group_df$ymid,
+           label = group_df$province, family = fig_font, size = 3) +
+  annotate("text", x = mean(c(x_dist_min, x_dist_max)), y = group_df$ymid,
+           label = group_df$district, family = fig_font, size = 3) +
+  annotate("text", x = mean(c(x_group_min, x_group_max)), y = group_df$ymid,
+           label = paste0('"Group ', group_df$group, ' ("~italic(g)~"="~', 
+                          group_df$group, '~")"'), 
+           family = fig_font, size = 3, parse = TRUE) + 
+  
+  # treatment fills without borders
+  annotate("rect", xmin = status_df$xmin, xmax = status_df$xmax,
+           ymin = status_df$ymid - row_h / 2, ymax = status_df$ymid + row_h / 2,
+           fill = status_df$fill, color = NA) +
+  
+  # one border around the whole treatment block
+  annotate("rect", xmin = time_start, xmax = x_end, ymin = y_bottom, 
+           ymax = y_body_top, fill = NA, color = "black", 
+           linewidth = inner_line) +
+  annotate("text", x = status_df$xmid, y = status_df$ymid, 
+           label = status_df$status, color = status_df$txt, family = fig_font,
+           size = 3) +
+  annotate("rect", xmin = x_type_min, xmax = x_end, ymin = y_bottom,
+           ymax = y_top, fill = NA, color = "black", linewidth = outer_line) +
+  coord_fixed(ratio = 1, xlim = c(x_type_min, x_end), ylim = c(y_bottom, y_top),
+              expand = FALSE, clip = "off") +
+  theme_void() +
+  theme(
+    text = element_text(family = fig_font),
+   # plot.margin = margin(0, 50, 0, 50)) # original -> pdf_width <- 9
+   # plot.margin = margin(t = 1, r = 25, b = 1, l = 25)) -> pdf_width <- 8.5
+   #plot.margin = margin(t = 1, r = 20, b = 1, l = 20)) # -> pdf_width <- 8
+   plot.margin = margin(t = 1, r = 10, b = 1, l = 10)) # -> pdf_width <- 7.75
+
+plot_frame
+
+pdf_width <- 7.75 # increasing this also adds margin within the cell / decreasing this increases text size
+
+pdf_height <- pdf_width * (y_top - y_bottom) / (x_end - x_type_min)
+pdf("./graph/fig_02_analysis_framework.pdf",
+    width = pdf_width, height = pdf_height)
+print(plot_frame)
+dev.off()
+
+```
+<br>
+
+# Supplementary Figure A1. Propensity score distribution by control group
+<br>
+```{r fig_a_01, warning=FALSE}
+
+# Reference
+# https://cran.r-project.org/web/packages/cobalt/vignettes/cobalt.html#why-cobalt
+# https://ngreifer.github.io/WeightIt/articles/WeightIt.html
+
+# overlap 1: treated vs never-treated group
+# ------------------------------------------------------------------------------
+
+data.ovl <- data %>%
+  filter(quarter == 2015.4) %>%              
+  mutate(psgroup = ifelse(group > 0, 1, 0))
+
+pscore.tr <- stats::glm(psgroup ~ logfacn + semp + urba + imps + litr,
+                        family = "binomial", data = data.ovl)
+ps.fit <- as.vector(pscore.tr$fitted.values)
+ps.fit2 <- pmin(ps.fit, 1 - 1e-16)  # Adjust fitted values to avoid extremes
+
+stat.ovl <- WeightIt::weightit(
+  psgroup ~ logfacn + semp + urba + imps + litr,
+  data = data.ovl,
+  method = "glm",
+  estimand = "ATT")
+
+bal.tab(stat.ovl) %>% put()
+bal.plot(stat.ovl, var.name = "prop.score", 
+         which = "both", type = "histogram", mirror = TRUE)
+         # "both" shows unajusted and adjusted results
+bal.plot(stat.ovl, var.name = "prop.score", 
+         which = "both", mirror = FALSE) # "unadjusted" only shows adjusted results
+
+
+# overlap 2: treated vs last treated cohort as control
+# ------------------------------------------------------------------------------
+
+data.ovl2 <- data %>%
+  filter(group > 0) %>%                         # drop group = 0
+  filter(quarter == 2015.4) %>%                 # filter unique quarter
+  mutate(psgroup = ifelse(group == 9, 0, 1))    # last cohort as control
+        
+stat.ovl2 <- WeightIt::weightit(
+  psgroup ~ logfacn + semp + urba + imps + litr,
+  data = data.ovl2,
+  method = "glm",
+  estimand = "ATT")
+
+bal.tab(stat.ovl2) %>% put()
+bal.plot(stat.ovl2, var.name = "prop.score", 
+         which = "both", type = "histogram", mirror = TRUE)
+bal.plot(stat.ovl2, var.name = "prop.score",
+         which = "both", mirror = FALSE) # "unadjusted" only shows adjusted results
+
+
+# overlap 3: treated vs last treated cohort + not-yet-treated as control
+# ------------------------------------------------------------------------------
+
+data.ovl2 <- data %>%
+  filter(group > 0) %>%                         # drop group=0
+  filter(quarter == 2015.4) %>%                 # filter unique quarter
+  mutate(psgroup = ifelse(group == 9, 0, 1))    # last cohort as control
+
+data.ovlnyt <- data.ovl2 %>%                    # extract
+  filter(psgroup > 0) %>%                       # filter nyt group
+  filter(group > 4) %>%                         # exclude the first treated
+  mutate(psgroup = ifelse(psgroup == 1, 0, 0))  # nyt cohort as control
+
+data.ovl3 <- rbind(data.ovl2, data.ovlnyt)      # combine dataset
+        
+stat.ovl3 <- WeightIt::weightit(
+  psgroup ~ logfacn + semp + urba + imps + litr,
+  data=data.ovl3,
+  method = "glm",
+  estimand = "ATT")
+
+summary(stat.ovl3) %>% put()
+bal.tab(stat.ovl3) %>% put()
+bal.plot(stat.ovl3, var.name = "prop.score", 
+         which = "both", type = "histogram", mirror = TRUE)
+bal.plot(stat.ovl3, var.name = "prop.score",
+         which = "both", mirror = FALSE) # "unadjusted" only shows adjusted results
+         
+love.plot(stat.ovl3, binary = "std", thresholds = c(m = .1))
+
+# overlap 4: treated vs never-treated + all not-yet-treated group
+# ------------------------------------------------------------------------------
+
+data.ovlnvt <- data %>%
+  filter(group == 0) %>%                   # keep never-treated group
+  filter(quarter == 2015.4) %>%
+  mutate(psgroup = 0)
+data.ovl4 <- rbind(data.ovl3, data.ovlnvt) # combine dataset
+
+stat.ovl4 <- WeightIt::weightit(
+  psgroup ~ logfacn + semp + urba + imps + litr,
+  data = data.ovl4,
+  method = "glm",
+  estimand = "ATT")
+
+bal.tab(stat.ovl4) %>% put()
+bal.plot(stat.ovl4, var.name = "prop.score",
+         which = "both", type = "histogram", mirror = TRUE)
+bal.plot(stat.ovl4, var.name = "prop.score",
+         which = "both", mirror = FALSE) # "unadjusted" only shows adjusted results
+
+
+# Plots ------------------------------------------------------------------------
+
+plot.ovl1 <- cbind.data.frame(stat.ovl$ps, stat.ovl$weights, 
+                              stat.ovl$treat, "nvt")
+plot.ovl2 <- cbind.data.frame(stat.ovl2$ps, stat.ovl2$weights, 
+                              stat.ovl2$treat, "last")
+plot.ovl3 <- cbind.data.frame(stat.ovl3$ps, stat.ovl3$weights, 
+                              stat.ovl3$treat, "lastnyt")
+
+plot.ovl.all <- lapply(
+ list(plot.ovl1, plot.ovl2, plot.ovl3),
+ setNames, c("ps", "weight", "treat", "control_type")) %>%
+ do.call(rbind, .) %>%
+ mutate(
+   control_type = factor(control_type,
+                  levels = c("lastnyt", "last", "nvt"),
+                  labels = c("Later-treated\n(not-yet- + last-treated)",
+                             "Last-treated", "Never-treated")),
+   group = factor(treat,
+                   levels = c(0, 1),
+                   labels = c("Control", "Intervention")))
+
+write_xlsx(plot.ovl.all, "./output/fig_a_01_overlap.xlsx")
+
+theme.ps <- function() {
+ theme_bw() +
+ theme(
+   text = element_text(family = "Source Sans 3"), 
+   panel.border = element_rect(color = "black", linewidth = 0.45),
+   panel.grid.major.x = element_blank(),
+   panel.grid.major.y = element_blank(),
+   panel.grid.minor = element_blank(),
+   panel.background = element_blank(),
+   plot.margin = margin(t = 0.01, r = 0.01, b = 0.07, l = 0.04, unit = "in"),
+   axis.title.x = element_text(color = "black", vjust = -1.1, size = 6.5),
+   axis.title.y = element_text(color = "black", vjust = 2, size = 6.5),
+   axis.text.x = element_text(color = "black", size = 6.5),
+   axis.text.y = element_text(color = "black", size = 6.5),
+   axis.ticks.y = element_line(color = "black", linewidth = 0.25),
+   axis.ticks.x = element_line(color = "black", linewidth = 0.25),
+   strip.text = element_text(color = "black", size = 6.5),
+   strip.text.x = element_text(margin = margin(0, 0, 0.04, 0, "in")),
+   strip.background = element_blank(),
+   legend.title = element_blank(),
+   legend.text = element_text(size = 6),
+   legend.key.size = unit(0.15, "in"),
+   legend.key.height = unit(0.05, "in"),
+   legend.position = c(0.15, -0.16),
+   legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+   legend.key.width = unit(0.05, "in"))
+  }
+
+# Plot with legend, scale fixed
+plot.ovl.mirror.fix <- ggplot() +
+ geom_histogram(data = subset(plot.ovl.all, treat == 0),
+                aes(x = ps, y = after_stat(count / sum(count)),
+                    fill = "Control"),
+                bins = 30, col = "black", lwd = 0.2) +
+ geom_histogram(data = subset(plot.ovl.all, treat == 1),
+                aes(x = ps, y = -after_stat(count / sum(count)),
+                    fill = "Intervention"),
+                bins = 30, col = "black", lwd = 0.2) +
+ facet_wrap(~control_type, ncol = 3) +
+ scale_y_continuous(name = "Proportion") +
+ scale_x_continuous(name = "Propensity score",
+                    limits = c(-0.1, 1.1), seq(0, 1, by = 0.2)) +
+ scale_fill_manual(
+   values = c("Control" = "#F8766D", "Intervention" = "#9bd1a4"),
+   guide = guide_legend(reverse = TRUE, nrow = 1)) +
+ theme.ps()
+
+plot.ovl.mirror.fix
+
+# Vector file
+pdf("./graph/fig_a_01_overlap.pdf", 
+    width = 5, height = 2.1)
+print(plot.ovl.mirror.fix)
+dev.off()
+
+```
+<br>
+
+# B6. Health service utilization trends
+<br>
+```{r pta, warning=FALSE}
+
+# By intervention group/cohort
+outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+
+table1_cohort <- data %>%
+ filter(quarter >= 2015.4 & quarter <= 2017.3) %>%
+ subset(., province != "01 Vientiane Capital")  # Drop Vientiane Capital
+
+head(table1_cohort)
+
+group_list <- list()
+t_total_list <- list()
+c_total_list <- list()
+total_list <- list()
+
+for (i in 1:length(outname)) {
+ outn <- rlang::sym(outname[i])
+ group_list[[i]] <- list()
+ t_total_list[[i]] <- list()
+ c_total_list[[i]] <- list()
+ total_list[[i]] <- list()
+
+ for (j in c(4, 5, 6, 8)) {
+   group_list[[i]][[j]] <- list()
+   t_total_list[[i]][[j]] <- list()
+   c_total_list[[i]][[j]] <- list()
+
+   # Intervention group
+   group_t <- table1_cohort %>%
+     mutate(group.new = j) %>%
+     mutate(event.time = time - group.new) %>%
+     filter(group == j) %>%
+     group_by(group, event.time) %>%
+     summarise(util.mean = mean(!!outn, na.rm = TRUE),
+               util.sd = sd(!!outn, na.rm = TRUE),
+               util.num = n()) %>%
+     mutate(util.se = util.sd / sqrt(util.num),
+            util.lower.ci = util.mean - qt(1 - (0.05 / 2), util.num - 1) * util.se,
+            util.upper.ci = util.mean + qt(1 - (0.05 / 2), util.num - 1) * util.se) %>%
+     mutate(intv = "Intervention")
+
+   # Control group
+   group_c <- table1_cohort %>%
+     mutate(group.new = j) %>%
+     mutate(event.time = time - group.new) %>%
+     filter(group > j) %>%
+     filter(event < 0) %>%
+     group_by(event.time) %>%
+     summarise(util.mean = mean(!!outn, na.rm = TRUE),
+               util.sd = sd(!!outn, na.rm = TRUE),
+               util.num = n()) %>%
+     mutate(util.se = util.sd / sqrt(util.num),
+            util.lower.ci = util.mean - qt(1 - (0.05 / 2), util.num - 1) * util.se,
+            util.upper.ci = util.mean + qt(1 - (0.05 / 2), util.num - 1) * util.se) %>%
+     mutate(group = j) %>%
+     mutate(intv = "Control")
+
+   group_tc <- rbind(group_t, group_c)
+   group_tc$outcome <- outname[i]
+   group_tc$util.sd <- NULL
+   group_list[[i]][[j]] <- group_tc
+
+   # Total
+   t_total <- table1_cohort %>%
+     mutate(group.new = j) %>%
+     mutate(event.time = time - group.new) %>%
+     filter(group == j)
+
+   t_total_list[[i]][[j]] <- t_total
+
+   c_total <- table1_cohort %>%
+     mutate(group.new = j) %>%
+     mutate(event.time = time - group.new) %>%
+     filter(group > j) %>%
+     filter(event < 0)
+
+   c_total_list[[i]][[j]] <- c_total
+ }
+
+ # Combined all possible control units
+ t_total_unlist <- unlist(t_total_list[i], recursive = FALSE)
+ t_total_bind <- do.call("rbind", t_total_unlist)
+
+ c_total_unlist <- unlist(c_total_list[i], recursive = FALSE)
+ c_total_bind <- do.call("rbind", c_total_unlist)
+
+ t_total_comb <- t_total_bind %>%
+   group_by(event.time) %>%
+   summarise(util.mean = mean(!!outn, na.rm = TRUE),
+             util.sd = sd(!!outn, na.rm = TRUE),
+             util.num = n()) %>%
+   mutate(util.se = util.sd / sqrt(util.num),
+          util.lower.ci = util.mean - qt(1 - (0.05 / 2), util.num - 1) * util.se,
+          util.upper.ci = util.mean + qt(1 - (0.05 / 2), util.num - 1) * util.se) %>%
+   mutate(intv = "Intervention")
+
+ c_total_comb <- c_total_bind %>%
+   group_by(event.time) %>%
+   summarise(util.mean = mean(!!outn, na.rm = TRUE),
+             util.sd = sd(!!outn, na.rm = TRUE),
+             util.num = n()) %>%
+   mutate(util.se = util.sd / sqrt(util.num),
+          util.lower.ci = util.mean - qt(1 - (0.05 / 2), util.num - 1) * util.se,
+          util.upper.ci = util.mean + qt(1 - (0.05 / 2), util.num - 1) * util.se) %>%
+   mutate(intv = "Control")
+
+ tc_total <- rbind(t_total_comb, c_total_comb)
+ tc_total$outcome <- outname[i]
+ tc_total$util.sd <- NULL
+ total_list[[i]] <- tc_total
+ }
+
+# Control group trends appear similar across cohorts but differ subtly in early event.time periods. In the later post-NHI period (event time 3–4), the trends are identical because units being used are small and identical, mainly from groups 8 and 9 (last treated). Calculations are correct.
+
+group_unlist <- unlist(group_list, recursive = FALSE)
+total_bind <- do.call("rbind", total_list)
+group_bind <- do.call("rbind", group_unlist)
+
+# write_xlsx(total_bind,"./output/sfig_02_pta_qrt_total.xlsx")
+# write_xlsx(group_bind,"./output/sfig_03_pta_qrt_group.xlsx")
+
+# Total
+# Averaging all units directly vs. averaging by group with weights should yield 
+# identical results
+
+CS_compute <- group_bind %>%
+ group_by(event.time, intv, outcome) %>%
+ mutate(weight = util.num / sum(util.num)) %>%
+ mutate(avgdyn = sum(util.mean * weight)) %>%
+ dplyr::select(c("event.time", "intv", "outcome", "avgdyn")) %>%
+ unique() %>%
+ arrange(outcome, intv, event.time)
+
+CS_crosscheck <- left_join(CS_compute, total_bind,
+                           by = c("event.time", "intv", "outcome")) %>%
+  dplyr::select(contains(c("avgdyn", "util.mean"))) %>%
+  print(n = Inf) %>% put()
+
+# The results are identical
+# Average of all units from each cohort by event time is equivalent to
+# 1) average by cohort, and 2) average with weighting by unit size (CS code)
+
+```
+
+# Supplementary Figure B1. Quarterly health service utilization trends, overall
+<br>
+```{r fig_b_01, warning=FALSE}
+
+var_list <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+var_label <- c("Outpatient visits per 1000, aged ≥ 5",
+               "Inpatient admissions per 100 000, aged ≥ 5",
+               "Outpatient visits per 1000, aged < 5",
+               "Inpatient admissions per 100 000, aged < 5",
+               "Inpatient average length of stay",
+               "Institutional birth rate")
+
+total_bind <- total_bind %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label))
+
+xl <- c(min(total_bind$event.time), # x-axis length / index
+          max(total_bind$event.time))
+
+write_xlsx(total_bind,"./output/fig_b_01_pta_overall.xlsx")
+
+plot <- ggplot(
+  total_bind, aes(x = event.time, y = util.mean, 
+                  group = intv, color = intv)) + 
+  facet_wrap(~outcome2, ncol = 2, scales = "free") + 
+  geom_vline(
+    aes(xintercept = 0), linetype = "99", 
+    color = "grey75", size = 0.2) +
+  geom_ribbon(
+    data = subset(total_bind, intv == "Intervention"),
+    aes(ymin = util.lower.ci, ymax = util.upper.ci),
+    fill = "#c5dec9", color = "#bad9bf", alpha = 0.65, 
+    linetype = 1, linewidth = 0.025) +
+  geom_ribbon(
+    data = subset(total_bind, intv == "Control"),
+    aes(ymin = util.lower.ci, ymax = util.upper.ci),
+    fill = "#f5cdc6", color = "#f5beb5", alpha = 0.8, 
+    linetype = 1, linewidth = 0.025) +
+  geom_point(data = subset(total_bind, intv == "Control"), size = 0.6) +
+  geom_line(data = subset(total_bind, intv == "Control"), linewidth = 0.3) +
+  geom_point(data = subset(total_bind, intv == "Intervention"), size = 0.6) +
+  geom_line(data = subset(total_bind, intv == "Intervention"), linewidth = 0.3) +
+  scale_y_continuous(name = "Health service utilization") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter", 
+                     breaks = xl[1]:xl[2]) +
+  scale_color_manual(values = c("Control" = "#e85238", "Intervention" = "#006918"),
+                     guide = guide_legend(reverse = TRUE, nrow = 1)) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75, 
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks = element_line(color = "black", linewidth = 0.2),
+    axis.text = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.2, "in"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+    legend.position = "inside", 
+    legend.position.inside =  c(0.1, -0.067))
+
+# Vector file
+pdf("./graph/fig_b_01_pretrend_overall.pdf", 
+    width = 5, height = 5.4)
+print(plot)
+dev.off()
+
+```
+
+# Supplementary Figure B2. Quarterly health service utilization trends by intervention group
+<br>
+```{r fig_b_02, warning=FALSE}
+
+var_list <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+var_label_l <- c("Outpatient\nvisits\nper 1000,\naged ≥ 5",
+                 "Inpatient\nadmissions\nper 100 000,\naged ≥ 5",
+                 "Outpatient\nvisits\nper 1000,\naged < 5",
+                 "Inpatient\nadmissions\nper 100 000, \naged < 5",
+                 "Inpatient\naverage\nlength\nof stay",
+                 "Institutional\nbirth\nrate")
+
+group_bind <- group_bind %>%
+  mutate(cohort = factor(group, 
+                         levels = c(4, 5, 6, 8),
+                         labels = c("NHI introduced in \nQ3/2016\nN=15",
+                                    "NHI introduced in \nQ4/2016\nN=7",
+                                    "NHI introduced in \nQ1/2017\nN=37",
+                                    "NHI introduced in \nQ3/2017\nN=24")),
+         outcome2 = factor(outcome, levels = var_list, labels = var_label_l))
+
+xl <- c(min(group_bind$event.time), # x-axis length / index
+          max(group_bind$event.time))
+
+write_xlsx(group_bind,"./output/fig_b_02_pta_cohort.xlsx")
+
+plot <- ggplot(
+  group_bind, aes(x = event.time, y = util.mean, group = intv, color = intv)) +
+  facet_grid(outcome2 ~ cohort, scales = "free", switch = "y") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             color = "grey75", size = 0.2) +
+  geom_ribbon(data = subset(group_bind, intv == "Intervention"),
+              aes(x = event.time, ymin = util.lower.ci, ymax = util.upper.ci),
+              fill = "#c5dec9", color = "#bad9bf", alpha = 0.65, 
+              linetype = 1, linewidth = 0.025) +
+  geom_ribbon(data = subset(group_bind, intv == "Control"),
+              aes(x = event.time, ymin = util.lower.ci, ymax = util.upper.ci),
+              fill = "#f5cdc6", color = "#f5beb5", alpha = 0.8, 
+              linetype = 1, linewidth = 0.025) +
+  geom_point(data = subset(group_bind, intv == "Control"), 
+             aes(x = event.time, y = util.mean), size = 0.6) +
+  geom_line(data = subset(group_bind, intv == "Control"), 
+            aes(x = event.time, y = util.mean), linewidth = 0.3) +
+  geom_point(data = subset(group_bind, intv == "Intervention"), 
+             aes(x = event.time, y = util.mean), size = 0.6) +
+  geom_line(data = subset(group_bind, intv == "Intervention"), 
+            aes(x = event.time, y = util.mean), linewidth = 0.3) +
+  scale_y_continuous(name = "Health service utilization") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  scale_color_manual(values = c("Control" = "#e85238", 
+                                "Intervention" = "#006918"),
+                     guide = guide_legend(reverse = TRUE, nrow = 1)) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75, 
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+    axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+    axis.text.y = element_text(color = "black", size = 6.75),
+    axis.text.x = element_text(color = "black", size = 6.75),
+    strip.placement = "outside",
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.y.left = element_text(
+      angle = 0, hjust = 0, 
+      margin = margin(t = 0, r = 0, b = 0, l = 0, "in")),
+    strip.text.x = element_text(margin = margin(0, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.2, "in"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+    legend.position = "inside", 
+    legend.position.inside =  c(0.05, -0.057))
+
+# Vector file
+pdf("./graph/fig_b_02_pretrend_cohort.pdf", 
+    width = 5, height = 6.25)
+print(plot)
+dev.off()
+
+```
+
+# Log close
+<br>
+```{r log_close, warning=FALSE}
+
+# Log close
+log_close(footer = TRUE)
+writeLines(readLines(logrecord))
+
+```
+<br>

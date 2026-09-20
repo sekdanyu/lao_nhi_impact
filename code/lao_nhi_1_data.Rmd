@@ -1,0 +1,413 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Setup
+<br>
+```{r setup}
+
+# summarize warning at the end
+options(warn = 0)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = TRUE,
+  message = FALSE)
+  
+# Set working directory
+rm(list = ls(all.names = TRUE))
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# Install and load packages
+source("lao_nhi_0_package.r", echo = TRUE)
+
+# Create directories
+if(!dir.exists("./log")) {dir.create("./log")}
+
+# Log
+logpath <- file.path(getwd(), "log", "lao_nhi_1_data.log")
+logrecord <- log_open(logpath, autolog = TRUE, show_notes = FALSE)
+log_code()
+
+```
+<br>
+
+# outpatient, inpatient, maternity data
+<br>
+```{r opd_ipd_mch, message=FALSE, warning=FALSE}
+
+# Lao District Health Information System 2 (DHIS2)
+# Output format: table layout w/ hierarchy (csv)
+
+# All data downloaded on 2023.12.05
+# outpatient, inpatient by diseases (v2.0)
+# outpatient, inpatient, inpatient days, gyneco-obstetrics total
+# maternal health services
+# immunization
+# growth monitoring
+
+# Period: 10/2013 - 11/2023
+# Age (<5, ≥5)
+# Organization unit selected:
+#   Private Hospitals
+#   Private Pharmacies
+#   Private Clinics
+#   HMIS: All Health Facilities
+#   HMIS: All Health Facilities (NCLE)
+#   DH: District Hospitals
+#   DH: Community Hospitals
+#   DH-A: Community Hospitals
+#   DH-B: Community Hospitals
+#   Central and Provincial Hospitals
+#   CH: Central Hospitals
+#   PH: Provincial Hospitals
+#   HC: Health Centers
+
+# Load data
+datalist_op = list()
+for (i in 1:18) {
+    datalist_op[[i]] <- read_xlsx(paste("./data import/dhis2 dec2023/OP disease ",
+                                        i, ".xlsx", sep = ""))
+}
+data_op = do.call(rbind, datalist_op)
+
+datalist_ip = list()
+for (i in 1:18) {
+    datalist_ip[[i]] <- read_excel(paste("./data import/dhis2 dec2023/IP disease ",
+                                         i, ".xlsx", sep = ""))
+}
+data_ip = do.call(rbind, datalist_ip)
+
+# warnings(): 
+# datadescription
+# changed from "TotalHospitalDaysOfDischargePatients" to "Inpatient Days of Care"
+# changed from "Total hospitalization days" to "Total number of patients discharged during the period"
+# ignore warnings because inpatient days data are empty for <5, ≥5 disaggregated data
+
+datalist_opip = list()
+for (i in 1:18) {
+    datalist_opip[[i]] <- read_excel(paste("./data import/dhis2 dec2023/OP-IP total ",
+                                           i, ".xlsx", sep = ""))
+}
+data_opip = do.call(rbind, datalist_opip)
+
+datalist_ipday = list()
+fileseq <- c("1-10", "11-18")
+for (i in fileseq) {
+    datalist_ipday[[i]] <- read_excel(paste("./data import/dhis2 dec2023/IP day ",
+                                            i, ".xlsx", sep=""))
+}
+data_ipday = do.call(rbind, datalist_ipday)
+
+datalist_mch = list()
+fileseq <- c("1-3", "4-8", "9-12", "13-15", "16-18")
+for (i in fileseq) {
+    datalist_mch[[i]] <- read_excel(paste("./data import/dhis2 dec2023/MCH ",
+                                          i, ".xlsx", sep = ""))
+}
+data_mch = do.call(rbind, datalist_mch)
+
+# Select relevant columns for each dataset
+unique(data_op$datadescription)
+data_op <- data_op[, c(2, 6, 10, 11, 15, 17:ncol(data_op))]
+
+unique(data_ip$datadescription)
+data_ip <- data_ip[, c(2, 6, 10, 11, 15, 17:ncol(data_ip))]
+
+unique(data_opip$datadescription)
+data_opip <- data_opip[, c(2, 6, 10, 11, 15, 17:ncol(data_opip))]
+
+unique(data_ipday$datadescription)
+# "changed from "TotalHospitalDaysOfDischargePatients\" to "Inpatient Days of Care""
+data_ipday <- data_ipday[, c(2, 6, 7, 11, 13:ncol(data_ipday))]
+
+unique(data_mch$datadescription)
+data_mch <- data_mch[, c(2, 6, 7, 11, 13:ncol(data_mch))]
+
+# Rename columns for each dataset
+colnames(data_op) <- c(
+    "age_g", "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_op)[7:ncol(data_op)])
+
+colnames(data_ip) <- c(
+    "age_g", "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_ip)[7:ncol(data_ip)])
+
+colnames(data_opip) <- c(
+    "age_g", "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_opip)[7:ncol(data_opip)])
+
+colnames(data_ipday) <- c(
+    "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_ipday)[6:ncol(data_ipday)])
+
+colnames(data_mch) <- c(
+    "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_mch)[6:ncol(data_mch)])
+
+
+# Export datasets to Excel files
+if(!dir.exists("./data export")) {dir.create("./data export")}
+write_xlsx(data_op, "./data export/01_data_op.xlsx")
+write_xlsx(data_ip, "./data export/01_data_ip.xlsx")
+write_xlsx(data_opip, "./data export/01_data_opip.xlsx")
+write_xlsx(data_ipday, "./data export/01_data_ipday.xlsx")
+write_xlsx(data_mch, "./data export/01_data_mch.xlsx")
+
+```
+<br>
+
+# EPI and growth data
+<br>
+```{r epi_growth, message=FALSE, warning=FALSE}
+
+datalist_epi = list()
+for (i in 1:18) {
+    datalist_epi[[i]] <- read_excel(paste("./data import/dhis2 dec2023/EPI ",
+                                          i, ".xlsx", sep = ""))
+}
+data_epi = do.call(rbind, datalist_epi)
+
+data_hpv <- read_excel("./data import/dhis2 dec2023/HPV 1-18.xlsx")
+
+datalist_growth = list()
+fileseq <- c("1-5", "6-10", "11-15", "16-18")
+for (i in fileseq) {
+    datalist_growth[[i]] <- read_excel(paste("./data import/dhis2 dec2023/Growth ",
+                                             i, ".xlsx", sep = ""))
+}
+data_growth = do.call(rbind, datalist_growth)
+
+# Select relevant columns for each dataset
+unique(data_epi$datadescription)
+# datadescription
+# Class 5/10 year out school HPV 1: This data element contains legacy data of old data element HPV 1 for girls 9-12 years which was used to collect data from MNCH Outreach form.
+# Class 5/10 year out school HPV 2: This data element contains legacy data of old data element HPV 2 for girls 9-12 years which was used to collect data from MNCH Outreach form.
+data_epi <- data_epi[, c(2, 6, 7, 11, 13:ncol(data_epi))]
+
+unique(data_hpv$datadescription)
+data_hpv <- data_hpv[, c(2, 6, 7, 11, 13:ncol(data_hpv))]
+
+unique(data_growth$datadescription)
+data_growth <- data_growth[, c(2, 6, 7, 11, 13:ncol(data_growth))]
+
+# Rename columns for each dataset
+colnames(data_epi) <- c(
+    "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_epi)[6:ncol(data_epi)])
+
+colnames(data_hpv) <- c(
+    "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_hpv)[6:ncol(data_hpv)])
+
+colnames(data_growth) <- c(
+    "indicator", "province", "district", "facility", "facilityunit",
+    colnames(data_growth)[6:ncol(data_growth)])
+
+# Export datasets to Excel files
+write_xlsx(data_epi, "./data export/01_data_epi.xlsx")
+write_xlsx(data_hpv, "./data export/01_data_hpv.xlsx")
+write_xlsx(data_growth, "./data export/01_data_growth.xlsx")
+
+```
+
+# Population data
+<br>
+```{r population data}
+
+# Population data from DHIS2; 
+# Live Birth data from DHIS2;
+# Lao Statistics Bureau estimates (downloaded 2024.03.09)
+
+data.lsb <- read_excel("./data import/lao_dhis2_pop_mar2024.xlsx")
+data.lsb <- data.lsb[, c(1:4)]
+colnames(data.lsb) <- c("variable", "district", "year", "value")
+data.lsb$pnum <- substr(data.lsb$district, 1, 2) # character
+
+data.lsb <- data.lsb %>%
+  mutate(
+    district = case_when(
+      # old name -> new name
+      district == "0103 Xaisettha (Vientiane Capital)" ~ "0103 Xaisettha",
+      district == "0610 Viangkham (Louangphabang)" ~ "0610 Viangkham",
+      district == "0612 Phonthong (Louangphabang)" ~ "0612 Phonthong",
+      district == "1009 Viangkham (Vientiane)" ~ "1009 Viangkham",
+      district == "1606 Phonthong (Champasak)" ~ "1606 Phonthong",
+      district == "1701 Xaisettha (Attapu)" ~ "1701 Xaisettha",
+      TRUE ~ district))
+
+data.lsb <- arrange(data.lsb, district)
+unique(data.lsb$district)
+unique(data.lsb$variable)
+
+data.lsb <- data.lsb %>%
+  mutate(
+    variable = case_when(
+      # old name -> new name
+      variable == "LSB: Survival under 1 year (Estimated) (Previous year)" ~ "pop_survive1_prev",
+      variable == "LSB: Survival under 1 year (Estimated)" ~ "pop_survive1",
+      variable == "LSB: Births Live (Estimated)" ~ "pop_birthlive",
+      variable == "LSB: Women 15-45 years (Estimated) (Td target group)" ~ "pop_women1549_td",
+      variable == "LSB: Women 15-49 years for FP target group (Estimated)" ~ "pop_women1549_fp",
+      variable == "LSB: Population (Estimated-single age)" ~ "pop_total",
+      variable == "LSB: Children under 5 years (Estimated)" ~ "pop_age_u5",
+      TRUE ~ variable))
+
+unique(data.lsb$variable)
+col_names <- unique(data.lsb$variable)
+
+# [1] "pop_survive1_prev" "pop_birthlive"     "pop_women1549_td"  "pop_women1549_fp"
+# [5] "pop_survive1"      "pop_total"         "pop_age_u5"
+
+data.lsb <- data.lsb %>%
+  spread(key = variable, value = value) %>%       # pivot to wide
+  mutate(pop_age_o5 = pop_total - pop_age_u5) %>% # generate age ≥5
+  group_by(district) %>%
+  mutate(time = as.numeric(row_number()))         # add sequence
+
+write_xlsx(data.lsb, "./data export/01_data_pop_lsb.xlsx")
+
+data.lsb <- data.lsb %>%
+  filter(year <= 2020)
+
+
+# ------------------------------------------------------------------------------
+# Estimate monthly population estimates 01/2015 - 06/2019
+# through linear interpolation
+# ------------------------------------------------------------------------------
+
+popest_y1 <- data.lsb[, c("pnum", "district", "pop_age_u5", "year")]
+popest_y2 <- data.lsb[, c("pnum", "district", "pop_age_o5", "year")]
+popest_y3 <- data.lsb[, c("pnum", "district", "pop_birthlive", "year")]
+
+popest_m <-
+  seq(as.Date("2015-01-01"), as.Date("2020-01-01"), by = "month")
+
+popest_m1 <-
+  popest_y1 %>% dplyr::select(-pnum) %>% spread(district, value = "pop_age_u5")
+popest_m1 <- approxm(popest_m1, n = length(popest_m))
+popest_m1$month <- popest_m
+popest_m1$year <- NULL
+popest_m1 <- filter(popest_m1,!(month == "2020-01-01"))
+
+popest_m2 <-
+  popest_y2 %>% dplyr::select(-pnum) %>% spread(district, value = "pop_age_o5")
+popest_m2 <- approxm(popest_m2, n = length(popest_m))
+popest_m2$month <- popest_m
+popest_m2$year <- NULL
+popest_m2 <- filter(popest_m2,!(month == "2020-01-01"))
+
+popest_m3 <-
+  popest_y3 %>% dplyr::select(-pnum) %>% spread(district, value = "pop_birthlive")
+popest_m3 <- approxm(popest_m3, n = length(popest_m))
+popest_m3$month <- popest_m
+popest_m3$year <- NULL
+popest_m3 <- filter(popest_m3,!(month == "2020-01-01"))
+
+popest_m1 <-
+  popest_m1 %>% gather(key = "district", value = "pop_age_u5_m", -c(month))
+popest_m2 <-
+  popest_m2 %>% gather(key = "district", value = "pop_age_o5_m", -c(month))
+popest_m3 <-
+  popest_m3 %>% gather(key = "district", value = "pop_birth_m", -c(month))
+
+popest_m1$pop_age_u5_m <- round(popest_m1$pop_age_u5_m, -1)
+popest_m2$pop_age_o5_m <- round(popest_m2$pop_age_o5_m, -1)
+popest_m3$pop_birth_m <- round(popest_m3$pop_birth_m, -1)
+
+## Combine data
+data.pop.m <-
+  left_join(popest_m1, popest_m2, by = c("district", "month"))
+data.pop.m <-
+  left_join(data.pop.m, popest_m3, by = c("district", "month"))
+data.pop.m.dist <- data.pop.m
+
+# [1] "pop_survive1_prev" "pop_birthlive"     "pop_women1549_td"  "pop_women1549_fp"
+# [5] "pop_survive1"      "pop_total"         "pop_age_u5"
+
+# List of column names
+col_names
+
+# Initialize an empty data frame
+pop_m <- seq(as.Date("2015-01-01"), as.Date("2020-01-01"), by = "month")
+
+# Process each column
+pop_m_list <- list()
+for (i in 1:length(col_names)) {
+  col_n_sym <- rlang::sym(col_names[i])
+  popest_y <- select(data.lsb, district,!!col_n_sym, year)
+  
+  popest_m <- popest_y %>%
+    spread(district, value = !!col_n_sym) %>%
+    approxm(., n = length(pop_m)) %>%
+    mutate(month = pop_m) %>%
+    select(-year) %>%
+    gather(key = "district", value = "value",-month) %>%
+    mutate(value = round(value, 1)) %>%
+    mutate(variable = col_names[i])
+  
+  pop_m_list[[i]] <- popest_m
+}
+
+data.pop.m <- do.call("rbind", pop_m_list)
+data.pop.m.dist <- data.pop.m %>%
+  mutate(value = round(value, -1)) %>%
+  pivot_wider(names_from = variable, values_from = value) %>%
+  mutate(pop_age_o5 = pop_total - pop_age_u5) %>%
+  mutate(pnum = as.numeric(substr(district, 1, 2)))
+
+#colnames(data.pop.m.dist) <- c("month","district","age_u5.m.d","age_o5.m.d","birth.m.d")
+
+## province level
+data.pop.m.prov <- data.pop.m.dist %>%
+  group_by(pnum, month) %>%
+  summarise(across(starts_with("pop_"), sum, na.rm = TRUE)) %>%
+  arrange(pnum, month) %>%
+  mutate(faclevel = "PH")
+
+#colnames(data.pop.m.prov) <- c("pnum","month","age_u5.m.p","age_o5.m.p","birth.m.p","faclevel")
+
+# ------------------------------------------------------------------------------
+# Estimate quarterly population estimates 01/2015 - 06/2019 
+# through linear interpolation
+# ------------------------------------------------------------------------------
+
+data.pop.q.dist <- data.pop.m.dist %>%
+  mutate(quarter = lubridate::quarter(month, with_year = TRUE),
+         m = lubridate::month(month)) %>%
+  filter(m %in% c(3, 6, 9, 12)) %>% # filter month 3,6,9,12 for quarterly figure
+  select(-month, -m)
+
+data.pop.q.prov <- data.pop.m.prov %>%
+  mutate(quarter = lubridate::quarter(month, with_year = TRUE),
+         m = lubridate::month(month)) %>%
+  filter(m %in% c(3, 6, 9, 12)) %>% # filter month 3,6,9,12 for quarterly figure
+  select(-month,-m)
+
+# Rename columns
+data.pop.m.dist <- data.pop.m.dist %>%
+  rename_with(~paste0(., ".m.d"), starts_with("pop_"))
+data.pop.m.prov <- data.pop.m.prov %>%
+  rename_with(~paste0(., ".m.p"), starts_with("pop_"))
+data.pop.q.dist <- data.pop.q.dist %>%
+  rename_with(~paste0(., ".q.d"), starts_with("pop_"))
+data.pop.q.prov <- data.pop.q.prov %>%
+  rename_with(~paste0(., ".q.p"), starts_with("pop_"))
+
+# Export datasets to Excel files
+write_xlsx(data.pop.m.dist, "./data export/01_data_pop_m_d.xlsx")
+write_xlsx(data.pop.m.prov, "./data export/01_data_pop_m_p.xlsx")
+write_xlsx(data.pop.q.dist, "./data export/01_data_pop_q_d.xlsx")
+write_xlsx(data.pop.q.prov, "./data export/01_data_pop_q_p.xlsx")
+
+# Log close
+log_close(footer = TRUE)
+writeLines(readLines(logrecord))
+
+```
+<br>

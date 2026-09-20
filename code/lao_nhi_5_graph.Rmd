@@ -1,0 +1,1522 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Setup
+<br>
+```{r setup}
+
+# Set working directory
+rm(list = ls(all.names = TRUE))
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# Install and load packages
+source("lao_nhi_0_package.r", echo = TRUE)
+
+# Create directories
+if(!dir.exists("./graph")) {dir.create("./graph")}
+if (!dir.exists("./graph/placebo")) {dir.create("./graph/placebo")}
+if(!dir.exists("./log")) {dir.create("./log")}
+if(!dir.exists("./output")) {dir.create("./output")}
+if(!dir.exists("./output/public")) {dir.create("./output/public")}
+
+# Log
+logpath <- file.path(getwd(), "log", "lao_nhi_5_graph.log")
+logrecord <- log_open(logpath, autolog = TRUE, show_notes = FALSE)
+log_code()
+
+```
+<br>
+
+# Label and theme (r6 x c4)
+<br>
+```{r sfig_theme}
+
+# Outcome
+var_list <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+
+# Label top
+var_label_t <- c("Outpatient visits per 1000, aged ≥ 5",
+               "Inpatient admissions per 100 000, aged ≥ 5",
+               "Outpatient visits per 1000, aged < 5",
+               "Inpatient admissions per 100 000, aged < 5",
+               "Inpatient average length of stay",
+               "Institutional birth rate")
+
+# Label left
+var_label_l <- c("Outpatient\nvisits\nper 1000,\naged ≥ 5",
+                 "Inpatient\nadmissions\nper 100 000,\naged ≥ 5",
+                 "Outpatient\nvisits\nper 1000,\naged < 5",
+                 "Inpatient\nadmissions\nper 100 000, \naged < 5",
+                 "Inpatient\naverage\nlength\nof stay",
+                 "Institutional\nbirth\nrate")
+
+layer.64 <-
+  list(
+    geom_vline(aes(xintercept = 0), 
+             linetype = "99", color = "grey75", linewidth = 0.2),
+    geom_rect(aes(xmin = 0, xmax = Inf, 
+                ymin = overall.conf.low, ymax = overall.conf.high), 
+            fill = "#c5dec9", alpha = 0.15),
+    geom_hline(aes(yintercept = 0), color = "black", linewidth = 0.175),
+    geom_segment(aes(x = 0, xend = Inf, 
+                   y = overall.conf.low, yend = overall.conf.low), 
+               color = "#bad9bf", linewidth = 0.05, alpha = 0.5),
+    geom_segment(aes(x = 0, xend = Inf, 
+                   y = overall.conf.high, yend = overall.conf.high), 
+               color = "#bad9bf", linewidth = 0.05, alpha = 0.5),
+    geom_point(size = 0.6, color = "#006918"),
+    geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high), 
+                 size = 0.3, color = "#006918"),
+    geom_segment(aes(x = 0, xend = Inf, 
+                   y = overall.att, yend = overall.att), 
+               color = "#d62b47", linewidth = 0.2, alpha = 0.5),
+    geom_text(x = Inf, y = Inf, label = "\u0394", # expression(Delta)
+            family = "serif", color = "black",
+            vjust = 1.5, hjust = 6, size = 2),
+    geom_text(aes(x = x.pctchange, y = Inf, label = pctchange),
+            family = "Source Sans 3", color = "black",
+            vjust = 1.5, hjust = 0.5, size = 2))
+
+theme.64 <- function() {
+  theme_bw() +
+    theme(
+      text = element_text(family = "Source Sans 3"),
+      panel.border = element_rect(color = "black", linewidth = 0.45),
+      panel.grid.major.x = element_blank(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+      axis.title.x = element_text(color = "black", size = 6.75, 
+                                  margin = margin(0.125, 0, 0, 0, "in")),
+      axis.title.y = element_blank(),
+      axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+      axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+      axis.text.y = element_text(color = "black", size = 6.75),
+      axis.text.x = element_text(color = "black", size = 6.75),
+      strip.placement = "outside",
+      strip.text = element_text(color = "black", size = 6.75),
+      strip.text.y.left = element_text(
+        angle = 0, hjust = 0, 
+        margin = margin(t = 0, r = 0, b = 0, l = 0, "in")),
+      strip.text.x = element_text(margin = margin(0, 0, 0.05, 0, "in")),
+      strip.background = element_blank()
+      # legend.title = element_blank(),
+      # legend.text = element_text(size = 6.75),
+      # legend.position = c(0.75, 0.1)
+    )
+}
+
+```
+<br>
+
+# Figure 3. DiD analysis
+<br>
+```{r fig_03}
+
+# ------------------------------------------------------------------------------
+# Universal base period
+# ------------------------------------------------------------------------------
+
+# Load data
+plot.dyn <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows() %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_t),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high), 
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange)) %>%
+  filter(name == "uc.cls.p")
+
+write_xlsx(plot.dyn, paste0("./output/", "fig_03_did_main.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.dyn$event.time) # x-axis length / index
+
+plot <- 
+  ggplot(plot.dyn, aes(x = event.time, y = estimate)) +
+  facet_wrap(~outcome2, ncol = 2, scales = "free") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             col = "grey75", linewidth = 0.2) +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = overall.conf.low, 
+                ymax = overall.conf.high), fill = "#c5dec9", alpha = 0.15) +
+  geom_hline(aes(yintercept = 0), col = "black", linewidth = 0.175) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.low, 
+                   yend = overall.conf.low), color = "#bad9bf", 
+               linetype = 1, linewidth = 0.05, alpha = 0.5) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.high, 
+                   yend = overall.conf.high), color = "#bad9bf", 
+               linetype = 1, linewidth = 0.05, alpha = 0.5) +
+  geom_point(size = 0.6, color = "#006918") +
+  geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high),
+                 size = 0.3, color = "#006918") +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.att, yend = overall.att),
+               color = "#d62b47", linewidth = 0.2, alpha = 0.5) +
+  geom_text(x = 1.7, y = Inf, label = "\u0394", # expression(Delta)
+            family = "serif", color = "black", 
+            vjust = 1.5, size = 2, inherit.aes = FALSE) +
+  geom_text(aes(x = 2.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "black", 
+            vjust = 1.5, size = 2) +
+  scale_y_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter", 
+                     breaks = xl[1]:xl[2]) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75,
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+    axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+    axis.text.y = element_text(color = "black", size = 6.75),
+    axis.text.x = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.75),
+    legend.position.inside = c(0.75, 0.1))
+
+# Vector file
+pdf("./graph/fig_03_did_main.pdf",
+    width = 5, height = 5.4)
+print(plot)
+dev.off()
+
+write_xlsx(plot.dyn %>%
+  dplyr::select(-c("type", "term", "name", "avgunit", "avgdyn",
+                   "pretrendtype", "pctchange")) %>%
+  relocate(outcome, outcome2, group),
+  paste0("./output/public/", "fig_03_did_main.xlsx"))
+
+# ------------------------------------------------------------------------------
+# Varying base period
+# ------------------------------------------------------------------------------
+
+# Load data
+plot.dyn <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows() %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_t),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high), 
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange)) %>%
+  filter(name == "vc.cls.p")
+
+write_xlsx(plot.dyn, paste0("./output/", "fig_b_04_did_main_varying.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.dyn$event.time) # x-axis length / index
+
+plot <- 
+  ggplot(plot.dyn, aes(x = event.time, y = estimate)) +
+  facet_wrap(~outcome2, ncol = 2, scales = "free") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             col = "grey75", linewidth = 0.2) +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = overall.conf.low, 
+                ymax = overall.conf.high), fill = "#c5dec9", alpha = 0.15) +
+  geom_hline(aes(yintercept = 0), col = "black", linewidth = 0.175) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.low, 
+                   yend = overall.conf.low), color = "#bad9bf", 
+               linetype = 1, linewidth = 0.05, alpha = 0.5) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.high, 
+                   yend = overall.conf.high), color = "#bad9bf", 
+               linetype = 1, linewidth = 0.05, alpha = 0.5) +
+  geom_point(size = 0.6, color = "#006918") +
+  geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high),
+                 size = 0.3, color = "#006918") +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.att, yend = overall.att),
+               color = "#d62b47", linewidth = 0.2, alpha = 0.5) +
+  geom_text(x = 1.7, y = Inf, label = "\u0394", # expression(Delta)
+            family = "serif", color = "black", 
+            vjust = 1.5, size = 2, inherit.aes = FALSE) +
+  geom_text(aes(x = 2.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "black", 
+            vjust = 1.5, size = 2) +
+  scale_y_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter", 
+                     breaks = xl[1]:xl[2]) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75,
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+    axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+    axis.text.y = element_text(color = "black", size = 6.75),
+    axis.text.x = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.75),
+    legend.position.inside = c(0.75, 0.1))
+
+# Vector file
+pdf("./graph/fig_b_04_did_main_varying.pdf",
+    width = 5, height = 5.4)
+print(plot)
+dev.off()
+
+write_xlsx(plot.dyn %>%
+  dplyr::select(-c("type", "term", "name", "avgunit", "avgdyn",
+                   "pretrendtype", "pctchange")) %>%
+  relocate(outcome, outcome2, group),
+  paste0("./output/public/", "fig_b_04_did_main_varying.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure A2. DiD analysis by facility type
+<br>
+```{r fig_a_02_facility}
+
+# Load data
+read_data <- function(fl, vl) {
+  map_dfr(vl, ~ {
+    filepath <- paste0("./output/q_facl/", fl, 
+                       "/", .x, "_aggte_dyn_", fl, ".xlsx")
+    read_excel(filepath) %>%
+      mutate(facl = fl)})
+  }
+
+plot.fac <- map_dfr(c("dh", "hc"), 
+                    ~ read_data(.x, var_list)) %>%
+  mutate(outcome2 = factor(outcome,
+                           levels = var_list,
+                           labels = var_label_l),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high),
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange),
+         payment = case_when(
+           facl == "dh" & outcome %in% c("opo5r", "opu5r") ~ "FFS to Capitation",
+           facl == "dh" & outcome %in% c("ipo5r", "ipu5r", "iplos", "delr") ~ 
+             "FFS to Case-based payment",
+           facl == "hc" ~ "FFS to Capitation",
+           TRUE ~ NA),
+         payment = if_else(is.na(pctchange), NA, payment),
+         facl = factor(facl,
+                       levels = c("dh", "hc"),
+                       labels = c("District hospitals", "Health centers"))) %>%
+  filter(name == "uc.cls.p")
+
+write_xlsx(plot.fac, paste0("./output/", "fig_a_02_did_facility.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.fac$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.fac, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ facl, scales = "free", switch = "y") + 
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             color = "grey75", size = 0.2) +
+  geom_hline(aes(yintercept = 0), color = "black", linewidth = 0.175) +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = overall.conf.low, 
+                ymax = overall.conf.high), fill = "#c5dec9", alpha = 0.15) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.low, 
+                   yend = overall.conf.low), color = "#bad9bf", 
+               linewidth = 0.05, alpha = 0.5) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.high, 
+                   yend = overall.conf.high), color = "#bad9bf", 
+               linewidth = 0.05, alpha = 0.5) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.att, yend = overall.att), 
+               color = "#d62b47", linewidth = 0.2, alpha = 0.5) +
+  geom_point(size = 0.6, color = "#006918") +
+  geom_linerange(aes(ymin = conf.low, ymax = conf.high), 
+                 size = 0.3, color = "#006918") +
+  geom_text(x = 1.5, y = Inf, label = "\u0394", 
+            family = "serif", color = "black", vjust = 1.5, size = 2) +
+  geom_text(aes(x = 2.7, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "black", vjust = 1.5, size = 2) +
+#  geom_text(aes(x = -7, y = Inf, label = payment), 
+#            family = "Source Sans 3", color = "black", vjust = 1.5, hjust = 0,
+#            size = 1.8) +
+
+  scale_x_continuous(name = "Time since NHI introduction, quarter", 
+                     breaks = xl[1]:xl[2]) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75, 
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_blank(),
+    axis.ticks = element_line(color = "black", linewidth = 0.2),
+    axis.text = element_text(color = "black", size = 6.75),
+    strip.placement = "outside",
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.y.left = element_text(
+      angle = 0, hjust = 0,
+      margin = margin(t = 0, r = 0, b = 0, l = 0, "in")),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.75),
+    legend.position.inside = c(0.75, 0.1))
+
+# Vector file
+pdf("./graph/fig_a_02_did_facility.pdf", 
+    width = 5, height = 6)
+print(plot)
+dev.off()
+
+write_xlsx(plot.fac %>%
+    dplyr::select(-c("type", "term", "name", "avgunit", "avgdyn",
+                    "pretrendtype", "pctchange", "payment")) %>%
+    relocate(outcome, outcome2, facl, group), 
+    paste0("./output/public/", "fig_a_02_did_facility.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure A3. DiD analysis by district-level poverty status
+<br>
+```{r fig_a_03_poverty}
+
+# ------------------------------------------------------------------------------
+# Sun and Abraham (2020) - time-interaction
+# ------------------------------------------------------------------------------
+
+plot.pov <- read_excel("./output/q_disl/did_poverty_AS_time-interaction.xlsx")
+plot.pov <- plot.pov %>%
+  filter(pgroup != "Overall") %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_t),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high),
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange))
+
+write_xlsx(plot.pov, 
+           paste0("./output/","fig_a_03_did_poverty_AS_time-interaction.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.pov$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.pov, aes(x = event.time, y = estimate, color = pgroup, shape = pgroup)) + 
+  facet_wrap(~outcome2, ncol = 2, scales = "free") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             color = "grey75", size = 0.2) +
+  geom_hline(aes(yintercept = 0), color = "black", linewidth = 0.175) +
+  geom_point(position = position_dodge2(width = 0.6), size = 0.9) +
+  geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high), 
+                 position = position_dodge2(width = 0.6), size = 0.3) +
+  geom_text(x = 0.7, y = Inf, label = "\u0394", 
+            family = "serif", color = "#FC4E07", 
+            vjust = 1.5, size = 2) +
+  geom_text(data = subset(plot.pov, pgroup == "High-poverty"),
+            aes(x = 1.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "#FC4E07", 
+            vjust = 1.5, size = 2) +
+  geom_text(x = 2.7, y = Inf, label = "\u0394", 
+            family = "serif", color = "#00AFBB", 
+            vjust = 1.5, size = 2) +
+  geom_text(data = subset(plot.pov, pgroup == "Low-poverty"),
+            aes(x = 3.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "#00AFBB", 
+            vjust = 1.5, size = 2) +
+  scale_y_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  scale_color_manual(values = c("#FC4E07", "#00AFBB"),
+                     guide = guide_legend(nrow = 1)) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75,
+                                margin = margin(t = 0.125, unit = "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks = element_line(color = "black", linewidth = 0.2),
+    axis.text = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(t = 0.05, b = 0.05, unit = "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.2, "in"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+    legend.position = c(0.1, -0.065))
+
+# Vector file
+pdf("./graph/fig_a_03_did_poverty_AS_time-interaction.pdf", 
+    width = 5, height = 5.4)
+print(plot)
+dev.off()
+
+write_xlsx(plot.pov %>%
+    dplyr::select(-c("term", "pctchange", "baseline")) %>%
+    relocate(outcome, outcome2, pgroup), 
+    paste0("./output/public/", "fig_a_03_did_poverty_AS_time-interaction.xlsx"))
+
+# ------------------------------------------------------------------------------
+# Group-Time DiD (Callaway and Sant’Anna 2021) - no covariate
+# ------------------------------------------------------------------------------
+
+plot.pov <- read_excel("./output/q_disl/did_poverty_CS_nocov.xlsx")
+plot.pov <- plot.pov %>%
+  filter(pgroup != "Overall") %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_t),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high),
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange))
+
+write_xlsx(plot.pov, 
+           paste0("./output/", "fig_a_03_did_poverty_CS_nocov.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.pov$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.pov, aes(x = event.time, y = estimate, color = pgroup, shape = pgroup)) + 
+  facet_wrap(~outcome2, ncol = 2, scales = "free") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             color = "grey75", size = 0.2) +
+  geom_hline(aes(yintercept = 0), color = "black", linewidth = 0.175) +
+  geom_point(position = position_dodge2(width = 0.6), size = 0.9) +
+  geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high), 
+                 position = position_dodge2(width = 0.6), size = 0.3) +
+  geom_text(x = 0.7, y = Inf, label = "\u0394", 
+            family = "serif", color = "#FC4E07", 
+            vjust = 1.5, size = 2) +
+  geom_text(data = subset(plot.pov, pgroup == "High-poverty"),
+            aes(x = 1.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "#FC4E07", 
+            vjust = 1.5, size = 2) +
+  geom_text(x = 2.7, y = Inf, label = "\u0394", 
+            family = "serif", color = "#00AFBB", 
+            vjust = 1.5, size = 2) +
+  geom_text(data = subset(plot.pov, pgroup == "Low-poverty"),
+            aes(x = 3.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "#00AFBB", 
+            vjust = 1.5, size = 2) +
+  scale_y_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  scale_color_manual(values = c("#FC4E07", "#00AFBB"),
+                     guide = guide_legend(nrow = 1)) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75,
+                                margin = margin(t = 0.125, unit = "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks = element_line(color = "black", linewidth = 0.2),
+    axis.text = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(t = 0.05, b = 0.05, unit = "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.2, "in"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+    legend.position = c(0.1, -0.065))
+
+# Vector file
+pdf("./graph/fig_a_03_did_poverty_CS_nocov.pdf",
+    width = 5, height = 5.4)
+print(plot)
+dev.off()
+
+write_xlsx(plot.pov %>%
+    dplyr::select(-c("type", "term", "avgunit", "avgdyn",
+                    "pretrendtype", "pctchange", "method")) %>%
+    relocate(outcome, outcome2, pgroup, group), 
+    paste0("./output/public/", "fig_a_03_did_poverty_CS_nocov.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure A4. DiD analysis by intervention group
+<br>
+```{r fig_a_04_group}
+
+# Load data
+plot.grp.all <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_attgt.xlsx"))) %>%
+  bind_rows() %>%
+  dplyr::select(-c("weight", "n.group"))
+
+plot.grp <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_grp.xlsx"))) %>%
+  bind_rows() %>%
+  dplyr::select(-weight, -n.group) %>%
+  filter(group != "Average") %>%
+  mutate(group = as.numeric(group)) %>%
+  select(group, name, pretrendtype, outcome, 
+         estimate, std.error, conf.low, conf.high, change) %>%
+  rename(att = estimate, se = std.error) %>%
+  rename_at(vars(att:change), ~ paste0("overall.", .)) %>%
+  mutate(pctchange = scales::percent(overall.change, accuracy = 0.1))
+
+plot.grp <- plot.grp %>% 
+  left_join(plot.grp.all,
+            by = c("group","name","pretrendtype","outcome")) %>%
+  mutate(event.time = time - group,
+         group = factor(group, 
+                        levels = c(4, 5, 6, 8),
+                        labels = c("NHI introduced in \nQ3/2016\nN=15",
+                                   "NHI introduced in \nQ4/2016\nN=7",
+                                   "NHI introduced in \nQ1/2017\nN=37",
+                                   "NHI introduced in \nQ3/2017\nN=24")),
+         outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_l),
+         pctchange = if_else(event.time != 0, NA, pctchange)) %>%
+  group_by(group) %>%
+  mutate(x.pctchange = max(event.time) - 0.8) %>% 
+  filter(name == "uc.cls.p") %>%
+  select(-ptapval)
+
+write_xlsx(plot.grp, paste0("./output/", "fig_a_04_did_group.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.grp$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.grp, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ group, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf("./graph/fig_a_04_did_group.pdf", 
+    width = 5, height = 6.25)
+print(plot)
+dev.off()
+
+write_xlsx(plot.grp %>%
+    dplyr::select(-c("term", "name", "avgunit", "avgdyn", "avggrp",
+                     "event.time", "pretrendtype", "pctchange", "x.pctchange")) %>%
+    relocate(outcome, outcome2, group, time,
+             estimate, std.error, statistic, p.value, conf.low, conf.high,
+             point.conf.low, point.conf.high), 
+    paste0("./output/public/", "fig_a_04_did_group.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure A5. DiD analysis with adjusted model specifications 
+# (balanced, last-treated, no covariate)
+<br>
+```{r fig_a_05_adjust}
+
+# Load data
+plot.dyn <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows()
+
+plot.dyn.b <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn_b.xlsx"))) %>%
+  bind_rows()
+
+plot.dyn.b.new <- plot.dyn %>% # into new frame
+  select(type, term, event.time, name, pretrendtype, outcome) %>%
+  left_join(plot.dyn.b, by = c("type", "term", "event.time", 
+                               "name", "pretrendtype", "outcome")) %>%
+  filter(name == "uc.cls.p" | name == "vc.cls.p") %>% 
+  mutate(name = ifelse(name == "uc.cls.p","uc.clsbal", "vc.clsbal"))
+
+plot.ajt <- rbind(plot.dyn, plot.dyn.b.new) %>%
+  filter(name %in% c("uc.cls.p", "uc.clsbal", "uc.clslast", "u.cls")) %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_l),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high), 
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange),
+         spectype = factor(
+           name,
+           levels = c("uc.cls.p", "uc.clsbal", "uc.clslast", "u.cls"),
+           labels = c("Base model:\nLast + not-yet-treated\nno anticipation",
+                      "Balanced\nNHI exposure\n(e=0\u22122)",
+                      "Last-treated units\nas control",
+                      "No covariate\n(unconditional PTA)"))) %>%
+  group_by(name) %>%
+  mutate(x.pctchange = max(event.time) - 1.1)
+
+write_xlsx(plot.ajt, paste0("./output/", "fig_a_05_did_adjust.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+ 
+xl <- range(plot.ajt$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.ajt, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ spectype, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf("./graph/fig_a_05_did_adjust.pdf", 
+    width = 5, height = 6.25)
+print(plot)
+dev.off()
+
+write_xlsx(plot.ajt %>%
+    ungroup() %>%
+    dplyr::select(-c("type", "term", "name", "avgunit", "avgdyn",
+                    "pretrendtype", "pctchange", "x.pctchange")) %>%
+    dplyr::relocate(outcome, outcome2, spectype, group), 
+    paste0("./output/public/", "fig_a_05_did_adjust.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure A6. DiD analysis using alternative heterogeneity-robust estimators
+<br>
+```{r fig_a_06_hetero}
+
+data.htr <- read_excel("./output/fig_a_06_did_hetero.xlsx")
+unique(data.htr$method)
+
+data.htr <- data.htr %>%
+  mutate(outcome = factor(outcome, levels = var_list, labels = var_label_t))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(data.htr$event.time) # x-axis length / index
+
+plot <- ggplot(
+  data.htr, aes(x = event.time, y = estimate, color = method)) + 
+  facet_wrap(~ outcome, ncol = 2, scales = "free") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             color = "grey75", linewidth = 0.2) +
+  geom_hline(aes(yintercept = 0), color = "black", linewidth = 0.175) +
+  geom_point(position = position_dodge2(width = 0.6), size = 0.6) +
+  geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high), 
+                 position = position_dodge2(width = 0.6), size = 0.3) +
+  scale_y_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter", 
+                     breaks = xl[1]:xl[2]) +
+  scale_color_manual(name = "Estimation Method", 
+                     values = met.brewer("Cross", 6, "discrete")) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),  
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75, 
+                                margin = margin(t = 0.125, unit = "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks = element_line(color = "black", linewidth = 0.2),
+    axis.text = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(t = 0.05, b = 0.05, unit = "in")),
+    strip.background = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.2, "in"),
+    legend.key.spacing.y = unit(0.01, "in"),
+    legend.margin = margin(t = -0.05, l = -0.4, unit = "in")) +
+  guides(col = guide_legend(ncol = 3, byrow = TRUE))
+
+# Vector file
+pdf("./graph/fig_a_06_did_hetro.pdf", 
+    width = 5, height = 5.9)
+print(plot)
+dev.off()
+
+write_xlsx(
+  data.htr %>%
+    ungroup() %>%
+    relocate(outcome, method),
+  "./output/public/fig_a_06_did_hetero.xlsx"
+)
+
+```
+<br>
+
+# Supplementary Figure A7. DiD analysis with count data / log-count data
+<br>
+```{r fig_a_07_count}
+
+# ------------------------------------------------------------------------------
+# Count data
+# ------------------------------------------------------------------------------
+
+# Load data
+var_list_c <- c("opo5", "ipo5", "opu5", "ipu5", "ipday", "del")
+var_label_c <- c("Outpatient\nvisits,\naged ≥ 5",
+                 "Inpatient\nadmissions,\naged ≥ 5",
+                 "Outpatient\nvisits,\naged < 5",
+                 "Inpatient\nadmissions,\naged < 5",
+                 "Inpatient\ndays",
+                 "Institutional\nbirth")
+
+plot.dst <- var_list_c %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows() %>%
+  mutate(facl = "dist")
+
+read_data <- function(fl, vl) {
+  map_dfr(vl, ~ {
+    filepath <- paste0("./output/q_facl/", fl, "/", .x, "_aggte_dyn_", fl, ".xlsx")
+    read_excel(filepath) %>%
+      mutate(facl = fl)})
+}
+
+plot.cnt <- bind_rows(
+  map_dfr(c("all", "dh", "hc", "fac"), ~ read_data(.x, var_list_c)),
+  plot.dst)
+
+plot.cnt <- plot.cnt %>%
+  mutate(
+    outcome2 = factor(outcome, 
+                      levels = var_list_c, 
+                      labels = var_label_c),
+    facl2 = factor(facl, 
+                   levels = c("all", "dist", "dh", "hc", "fac"),
+                   labels = c("All (PH+DH+HC)", "District-level (DH+HC)", 
+                              "District hospitals", "Health centers", "health centers")),
+    across(c(overall.att, overall.se, overall.conf.low, overall.conf.high), 
+           ~ ifelse(event.time < 0, NA, .)),
+    pctchange = scales::percent(overall.change, accuracy = 0.1),
+    pctchange = if_else(event.time != 0, NA, pctchange),
+    x.pctchange = max(event.time) - 1.1) %>%
+  filter(name == "uc.cls.p")
+
+write_xlsx(plot.cnt, paste0("./output/","fig_a_07_did_count.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.cnt$event.time) # x-axis length / index
+
+plot <- plot.cnt %>%
+  filter(facl != "fac") %>%
+  ggplot(., aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ facl2, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf("./graph/fig_a_07_did_count.pdf", 
+    width = 5, height = 6.05)
+print(plot)
+dev.off()
+
+write_xlsx(plot.cnt %>%
+  dplyr::select(-c("type", "term", "name", "avgunit", "avgdyn",
+                   "pretrendtype", "pctchange", "x.pctchange", "facl")) %>%
+  relocate(outcome, outcome2, facl2, group),
+  paste0("./output/public/", "fig_a_07_did_count.xlsx"))
+
+# ------------------------------------------------------------------------------
+# Log of count data
+# ------------------------------------------------------------------------------
+
+# Load data
+var_list_lc <- c("lopo5", "lipo5", "lopu5", "lipu5", "lipday", "ldel")
+var_label_lc <- c("Outpatient\nvisits,\naged ≥ 5",
+                 "Inpatient\nadmissions,\naged ≥ 5",
+                 "Outpatient\nvisits,\naged < 5",
+                 "Inpatient\nadmissions,\naged < 5",
+                 "Inpatient\ndays",
+                 "Institutional\nbirth")
+
+plot.dst <- var_list_lc %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows() %>%
+  mutate(facl = "dist")
+
+read_data <- function(fl, vl) {
+  map_dfr(vl, ~ {
+    filepath <- paste0("./output/q_facl/", fl, "/", .x, "_aggte_dyn_", fl, ".xlsx")
+    read_excel(filepath) %>%
+      mutate(facl = fl)})
+}
+
+plot.lct <- bind_rows(
+  map_dfr(c("all", "dh", "hc"), ~ read_data(.x, var_list_lc)),
+  plot.dst)
+
+plot.lct <- plot.lct %>%
+  mutate(
+    outcome2 = factor(outcome, 
+                      levels = var_list_lc, 
+                      labels = var_label_lc),
+    facl2 = factor(facl,
+                   levels = c("all", "dist", "dh", "hc"),
+                   labels = c("All (PH+DH+HC)", "District-level (DH+HC)", 
+                              "District hospitals", "Health centers")),
+    across(c(overall.att, overall.se, overall.conf.low, overall.conf.high), 
+           ~ ifelse(event.time < 0, NA, .)),
+    estimate2 = 100 * (exp(estimate) - 1),
+    conf.low2 = 100 * (exp(conf.low) - 1),
+    conf.high2 = 100 * (exp(conf.high) - 1),
+    overall.att2 = 100 * (exp(overall.att) - 1),
+    overall.conf.low2 = 100 * (exp(overall.conf.low) - 1),
+    overall.conf.high2 = 100 * (exp(overall.conf.high) - 1)) %>%
+  select(-avgunit, -avgdyn, -change, -overall.change)
+
+#plot.cnt <- read_excel(paste0("./output/", "fig_a_07_did_count.xlsx"))
+plot.lct <- plot.lct %>%
+  left_join(
+    plot.cnt %>%
+      select(facl, outcome2, group, event.time, avgunit),
+    by = c("facl", "outcome2", "group", "event.time"))
+
+plot.lct <- plot.lct %>%
+    rename_with(
+    ~ paste0(.x, "_org"), 
+    c(estimate, conf.low, conf.high, overall.att, overall.se,
+      overall.conf.low, overall.conf.high)) %>%
+  mutate(
+    estimate = avgunit * (exp(estimate_org) - 1),
+    conf.low = avgunit * (exp(conf.low_org) - 1),
+    conf.high = avgunit * (exp(conf.high_org) - 1),
+    overall.att = avgunit * (exp(overall.att_org) - 1),
+    overall.conf.low = avgunit * (exp(overall.conf.low_org) - 1),
+    overall.conf.high = avgunit * (exp(overall.conf.high_org) - 1),
+    pctchange = scales::number(overall.att2, accuracy = 0.1, suffix = "%"),
+    pctchange = if_else(event.time != 0, NA, pctchange),
+    x.pctchange = max(event.time) - 1.1,
+    outcome2 = factor(outcome, 
+                      levels = var_list_lc, 
+                      labels = var_label_lc)) %>%
+  filter(name == "uc.cls.p")
+
+write_xlsx(plot.lct, "./output/fig_a_07_did_count_log.xlsx")
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.lct$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.lct, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ facl2, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf("./graph/fig_a_07_did_count_log.pdf", 
+    width = 5, height = 6.05)
+print(plot)
+dev.off()
+
+write_xlsx(plot.lct %>%
+  ungroup() %>%
+  select(outcome, outcome2, facl2, group, event.time,
+         estimate, conf.low, conf.high,
+         overall.att, overall.conf.low, overall.conf.high),
+  "./output/public/fig_a_07_did_count_log.xlsx")
+
+```
+<br>
+
+# Supplementary Figure A8. DiD analysis using monthly data (adjusted model specifications)
+<br>
+```{r fig_a_08_month}
+
+# Load data
+plot.dyn <- var_list %>%
+  map(~ read_excel(paste0("./output/m_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows()
+
+plot.dyn.b <- var_list %>%
+  map(~ read_excel(paste0("./output/m_disl/", .x, "_aggte_dyn_b.xlsx"))) %>%
+  bind_rows()
+
+plot.dyn.b.new <- plot.dyn %>% # into new frame
+  select(type, term, event.time, name, pretrendtype, outcome) %>%
+  left_join(plot.dyn.b, by = c("type", "term", "event.time", 
+                               "name", "pretrendtype", "outcome")) %>%
+  filter(name == "uc.cls.p" | name == "vc.cls.p") %>% 
+  mutate(name = ifelse(name == "uc.cls.p", "uc.clsbal", "vc.clsbal"))
+
+plot.ajt <- rbind(plot.dyn, plot.dyn.b.new) %>%
+  filter(name %in% c("uc.cls.p", "uc.clsbal", "uc.clslast", "u.cls")) %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_l),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high), 
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange),
+         spectype = factor(
+           name,
+           levels = c("uc.cls.p", "uc.clsbal", "uc.clslast", "u.cls"),
+           labels = c("Base model:\nLast + not-yet-treated\nno anticipation",
+                      "Balanced\nNHI exposure\n(e=0\u22127)",
+                      "Last treated units\nas control",
+                      "No covariate\n(unconditional PTA)"))) %>%
+  group_by(name) %>%
+  mutate(x.pctchange = max(event.time) - 4) # higher number -> move to the left
+
+write_xlsx(plot.ajt, paste0("./output/","fig_a_08_did_month.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+ 
+xl <- range(plot.ajt$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.ajt, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ spectype, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, month",
+                     breaks = c(-20, -10, 0, 10)) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf("./graph/fig_a_08_did_month.pdf", 
+    width = 5, height = 6.25)
+print(plot)
+dev.off()
+
+write_xlsx(plot.ajt %>%
+    ungroup() %>%
+    dplyr::select(-c("term", "name", "type", "avgunit", "avgdyn",
+                    "pretrendtype", "pctchange", "x.pctchange")) %>%
+    dplyr::relocate(outcome, outcome2, spectype, group), 
+    paste0("./output/public/", "fig_a_08_did_month.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure A9. Controlled interrupted time series analyses
+<br>
+```{r fig_a_09_cits}
+
+its_meta_final_q <- read_excel("./output/q_disl/cits_q.xlsx")
+its_meta_final_m <- read_excel("./output/m_disl/cits_m.xlsx")
+
+its_meta_final <- rbind(its_meta_final_q, its_meta_final_m)
+
+plot.its <- its_meta_final %>%
+  filter(!dataset %in% c("model_3_q", "model_3_m")) %>%
+  filter(!(outcome %in% c("ipu5r", "opu5r", "iplos", "delr") & 
+             dataset %in% c("model_2_q", "model_2_m"))) %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_t),
+         label = factor(label, 
+                        levels = c("DiD in slope (beta7)", 
+                                   "DiD in level (beta6)", 
+                                   "Parallel trend (beta5)"),
+                        labels = c("DiD in slope (beta7)", 
+                                   "DiD in level (beta6)", 
+                                   "Parallel trend (beta5)")),
+         model = factor(dataset, 
+                        levels = c("model_2_m", "model_1_m", 
+                                   "model_2_q", "model_1_q"),
+                        labels = c("Never-treated, monthly", 
+                                   "Last-treated, monthly", 
+                                   "Never-treated, quarterly", 
+                                   "Last-treated, quarterly")))
+
+write_xlsx(plot.its, "./output/fig_a_09_cits.xlsx")
+
+plot <- plot.its %>%
+  ggplot(aes(y = label, x = estimate, color = model, shape = model)) + 
+  geom_vline(xintercept = 0, color = "grey75", linetype = "99", size = 0.2) +
+  geom_point(size = 0.8, position = position_dodge2(width = 0.5)) +
+  geom_linerange(size = 0.3,aes(xmin = conf.low, xmax = conf.high),
+                 position = position_dodge2(width = 0.5)) +
+  facet_wrap(.~outcome2, ncol = 2, scales = "free") + #
+  scale_y_discrete(
+    labels = c("Parallel trend (beta5)" =
+                 expression("Parallel trend ("*beta[5]*")"),
+               "DiD in level (beta6)" = 
+                 expression("DiD in level ("*beta[6]*")"),
+               "DiD in slope (beta7)" = 
+                 expression("DiD in slope ("*beta[7]*")"))) +
+  scale_color_manual(
+    name = "Control group, data frequency:",
+    labels = c("Never-treated, monthly",
+               "Last-treated, monthly",
+               "Never-treated, quarterly",
+               "Last-treated, quarterly"),
+    values = c("#0CAFBB", "#0CAFBB", "#FC4E07", "#FC4E07")) +
+  scale_shape_manual(
+    name = "Control group, data frequency:",
+    labels = c("Never-treated, monthly",
+               "Last-treated, monthly",
+               "Never-treated, quarterly",
+               "Last-treated, quarterly"),
+    values = c(15, 17, 15, 17)) +
+  scale_x_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") + 
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),  
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black",size = 6.75,
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+    axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+    axis.text.y = element_text(color = 'black', size = 6.4),
+    axis.text.x = element_text(color = 'black', size = 6.75),
+    strip.text = element_text(color = 'black', size = 6.75),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.position = 'bottom',
+    legend.title = element_text(size = 6.25),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.2, "in"),
+    legend.key.spacing.y = unit(0.001, "in"),
+    legend.margin = margin(t = -0.05, r = 0, b = 0, l = -0.1, 
+                           unit = "in")) +
+  guides(col = guide_legend(ncol = 2, reverse = TRUE),
+         shape = guide_legend(ncol = 2, reverse = TRUE))
+
+# Vector file
+pdf("./graph/fig_a_09_cits.pdf", 
+    #    width = 5.5, height = 6)
+    width = 5, height = 5.4)
+print(plot)
+dev.off()
+
+write_xlsx(plot.its %>%
+    ungroup() %>%
+    dplyr::select(-c("dataset")) %>%
+    dplyr::relocate(outcome, outcome2, model, label), 
+    paste0("./output/public/", "fig_a_09_cits.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure B3. Placebo treatment timing / anticipation
+<br>
+```{r fig_b_03_placebo}
+
+# Create directories
+if(!dir.exists("./graph")) {dir.create("./graph")}
+if(!dir.exists("./graph/placebo")) {dir.create("./graph/placebo")}
+
+# ------------------------------------------------------------------------------
+# Placebo treatment timing test by group
+# ------------------------------------------------------------------------------
+
+name_list <- c(
+  "g9_no5",
+  "g9_1_all", "g9_2_all", "g9_3",
+  "g9_1_late", "g9_2_late",
+  "g9_1_late_no4", "g9_2_late_no4", "g9_3_late_no4",
+  "g5_1",
+  "g6_1", "g6_2",
+  "g8_1", "g8_2", "g8_3"
+)
+
+for (name in name_list) {
+
+# Load data
+plot.grp.all <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/placebo/", .x, "_attgt_", name, ".xlsx"))) %>%
+  bind_rows() %>%
+  dplyr::select(-c("weight", "n.group"))
+
+plot.grp <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/placebo/", .x, "_aggte_grp_", name, ".xlsx"))) %>%
+  bind_rows() %>%
+  dplyr::select(-weight, -n.group) %>%
+  filter(group != "Average") %>%
+  mutate(group = as.numeric(group)) %>%
+  select(group, name, pretrendtype, outcome, 
+         estimate, std.error, conf.low, conf.high, change) %>%
+  rename(att = estimate, se = std.error) %>%
+  rename_at(vars(att:change), ~ paste0("overall.", .)) %>%
+  mutate(pctchange = scales::percent(overall.change, accuracy = 0.1))
+
+str(plot.grp$overall.change)
+
+plot.grp <- plot.grp %>% 
+  left_join(plot.grp.all,
+            by = c("group", "name", "pretrendtype", "outcome")) %>%
+  mutate(event.time = time - group,
+         group = factor(group, 
+                        levels = c(4, 5, 6, 8),
+                        labels = c("NHI introduced in \nQ3/2016\nN=15",
+                                   "NHI introduced in \nQ4/2016\nN=7",
+                                   "NHI introduced in \nQ1/2017\nN=37",
+                                   "NHI introduced in \nQ3/2017\nN=24")),
+         outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_l),
+         pctchange = if_else(event.time != 0, NA, pctchange)) %>%
+  group_by(group) %>%
+  mutate(x.pctchange = max(event.time) - 0.8) %>% 
+  filter(name == "uc.cls.p")
+
+write_xlsx(plot.grp, paste0("./output/q_disl/placebo/", "fig_b_placebo_did_", name, ".xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.grp$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.grp, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ group, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf(paste0("./graph/placebo/fig_b_placebo_did_", name, ".pdf"), 
+    width = 5, height = 6.25)
+
+print(plot)
+dev.off()
+}
+
+# ------------------------------------------------------------------------------
+# Placebo treatment timing test, overall (g9_1, g9_2, g9_3)
+# ------------------------------------------------------------------------------
+
+name_list <- c(
+  "g9_1_late_no4", "g9_2_late_no4", "g9_3_late_no4"
+)
+
+for (name in name_list) {
+
+# Load data
+plot.dyn <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/placebo/", .x, "_aggte_dyn_", name, ".xlsx"))) %>%
+  bind_rows() %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_t),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high), 
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange)) %>%
+  filter(name == "uc.cls.p")
+
+write_xlsx(plot.dyn, paste0("./output/q_disl/placebo/", "fig_b_placebo_did_main_", name, ".xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- range(plot.dyn$event.time) # x-axis length / index
+
+plot <- 
+  ggplot(plot.dyn, aes(x = event.time, y = estimate)) +
+  facet_wrap(~outcome2, ncol = 2, scales = "free") +
+  geom_vline(aes(xintercept = 0), linetype = "99", 
+             col = "grey75", linewidth = 0.2) +
+  geom_rect(aes(xmin = 0, xmax = Inf, ymin = overall.conf.low, 
+                ymax = overall.conf.high), fill = "#c5dec9", alpha = 0.15) +
+  geom_hline(aes(yintercept = 0), col = "black", linewidth = 0.175) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.low, 
+                   yend = overall.conf.low), color = "#bad9bf", 
+               linetype = 1, linewidth = 0.05, alpha = 0.5) +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.conf.high, 
+                   yend = overall.conf.high), color = "#bad9bf", 
+               linetype = 1, linewidth = 0.05, alpha = 0.5) +
+  geom_point(size = 0.6, color = "#006918") +
+  geom_linerange(aes(x = event.time, ymin = conf.low, ymax = conf.high),
+                 size = 0.3, color = "#006918") +
+  geom_segment(aes(x = 0, xend = Inf, y = overall.att, yend = overall.att),
+               color = "#d62b47", linewidth = 0.2, alpha = 0.5) +
+  geom_text(x = 1.7, y = Inf, label = "\u0394", # expression(Delta)
+            family = "serif", color = "black", 
+            vjust = 1.5, size = 2, inherit.aes = FALSE) +
+  geom_text(aes(x = 2.5, y = Inf, label = pctchange), 
+            family = "Source Sans 3", color = "black", 
+            vjust = 1.5, size = 2) +
+  scale_y_continuous(name = "Average Treatment Effect on the Treated (ATT) estimates") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter", 
+                     breaks = xl[1]:xl[2]) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75,
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_text(color = "black", size = 6.75),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+    axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+    axis.text.y = element_text(color = "black", size = 6.75),
+    axis.text.x = element_text(color = "black", size = 6.75),
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.75),
+    legend.position.inside = c(0.75, 0.1))
+
+# Vector file
+pdf(paste0("./graph/placebo/fig_b_placebo_did_main_", name, ".pdf"), 
+    width = 5, height = 6.25)
+print(plot)
+dev.off()
+}
+
+# ------------------------------------------------------------------------------
+# Placebo treatment timing / anticipation (placebo 1, placebo 2, anticipation 1)
+# ------------------------------------------------------------------------------
+
+# Load data
+plot.dyn <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_aggte_dyn.xlsx"))) %>%
+  bind_rows() %>%
+  filter(name %in% c("uc.cls.p", "uc.clsant1"))
+plot.plc1 <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/placebo/", .x, "_aggte_dyn_g9_1_late_no4.xlsx"))) %>%
+  bind_rows() %>%
+  filter(name == "uc.cls.p") %>%
+  mutate(name = "placebo_1")
+plot.plc2 <- var_list %>%
+  map(~ read_excel(paste0("./output/q_disl/placebo/", .x, "_aggte_dyn_g9_2_late_no4.xlsx"))) %>%
+  bind_rows() %>%
+  filter(name == "uc.cls.p") %>%
+  mutate(name = "placebo_2")
+
+plot.plc <- rbind(plot.dyn, plot.plc1, plot.plc2) %>%
+  mutate(outcome2 = factor(outcome, 
+                           levels = var_list, 
+                           labels = var_label_l),
+         across(c(overall.att, overall.se, 
+                  overall.conf.low, overall.conf.high), 
+                ~ ifelse(event.time < 0, NA, .)),
+         pctchange = scales::percent(overall.change, accuracy = 0.1),
+         pctchange = if_else(event.time != 0, NA, pctchange),
+         spectype = factor(
+           name,
+           levels = c("uc.cls.p", "placebo_1", "placebo_2", "uc.clsant1"),
+           labels = c("Base model:\nLast + not-yet-treated\nno anticipation",
+                      "Placebo\ntreatment effects\n(e=0)",
+                      "Placebo\ntreatment effects\n(e=0, 1)",
+                      "Anticipation effects\n(e=\u22121)"))) %>%
+  group_by(name) %>%
+  mutate(x.pctchange = max(event.time) - 1.1)
+
+write_xlsx(plot.plc, paste0("./output/", "fig_b_03_did_placebo.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+ 
+xl <- range(plot.plc$event.time) # x-axis length / index
+
+plot <- ggplot(
+  plot.plc, aes(x = event.time, y = estimate)) + 
+  facet_grid(outcome2 ~ spectype, scales = "free", switch = "y") +
+  scale_x_continuous(name = "Time since NHI introduction, quarter",
+                     breaks = xl[1]:xl[2]) +
+  layer.64 +  # Add the layers
+  theme.64()  # Add the theme
+
+# Vector file
+pdf("./graph/fig_b_03_did_placebo.pdf", 
+    width = 5, height = 6.25)
+print(plot)
+dev.off()
+
+write_xlsx(plot.plc %>%
+    ungroup() %>%
+    dplyr::select(-c("type", "term", "name", "avgunit", "avgdyn",
+                    "pretrendtype", "pctchange", "x.pctchange")) %>%
+    dplyr::relocate(outcome, outcome2, spectype, group), 
+    paste0("./output/public/", "fig_b_03_did_placebo.xlsx"))
+
+```
+<br>
+
+# Supplementary Figure B5. Robustness to violation of parallel trends
+<br>
+```{r fig_b_05_honest}
+
+# Load data
+var_list_h <- var_list[1:3] # "opo5r" "ipo5r" "opu5r"
+var_label_h <- var_label_l[1:3]
+
+plot.hon <- var_list_h %>%
+  map(~ read_excel(paste0("./output/q_disl/", .x, "_honestdid.xlsx"))) %>%
+  bind_rows() %>%
+  filter(name == "uc.cls.p") %>%
+  mutate(
+    lb = as.numeric(lb),
+    ub = as.numeric(ub),
+    M = as.numeric(M),
+    point_est = as.numeric(point_est),
+    outcome2 = factor(outcome, 
+                      levels = var_list_h, 
+                      labels = var_label_h),
+    type2 = factor(type, levels = c("relative_magnitude", "smoothness"),
+                   labels = c("Relative~magnitudes~(bar(M))",
+                              "Smoothness~restrictions~(M)")),
+    org = factor(ifelse(method == "Original", "Original", 
+                        "Robust Confidence Interval"),
+                 levels = c("Robust Confidence Interval", "Original")),
+    M = ifelse(is.na(M) & type == "relative_magnitude", 0, M)) %>%
+  dplyr::arrange(desc(type), outcome, name, estimand, desc(method), M) %>%
+  mutate(
+    seq = as.numeric(ave(ub, type, name, outcome, estimand, FUN = seq_along))) %>%
+  dplyr::arrange(desc(type), outcome, name, estimand, desc(seq)) %>%
+  group_by(type, name, outcome, estimand) %>%
+  mutate(group_id = cur_group_id()) %>%
+  ungroup()
+
+smexp <- plot.hon %>%
+  dplyr::select(M, group_id, seq, type) %>%
+  filter(type == "smoothness") %>%
+  spread(key = seq, value = M) %>%
+  mutate(`1` = `2` - `3`) %>%
+  gather(
+    key = seq, value = M2,
+    -group_id, -type
+  ) %>%
+  mutate(seq = as.integer(seq))
+
+plot.hon <- plot.hon %>%
+  left_join(smexp, by = c("group_id", "type", "seq")) %>%
+  mutate(M2 = coalesce(M2, M))
+
+write_xlsx(plot.hon, paste0("./output/", "fig_b_06_did_honest.xlsx"))
+
+# Plot -------------------------------------------------------------------------
+
+xl <- c(0, max(plot.hon$M2, na.rm=T)) # x-axis length / index
+
+plot <- plot.hon %>%
+  filter(estimand == "avg") %>%  # Average effects
+  #filter(estimand == "e0") %>%  # Effects at e=0
+  ggplot(aes(color = org)) +
+  ggh4x::facet_grid2(outcome2 ~ type2, scales = "free", axes = "x", 
+                     independent = "x", switch = "both",
+                     labeller = labeller(outcome2 = label_value,
+                                         type2 = label_parsed)) +
+  geom_hline(aes(yintercept = 0), color = "black", linewidth = 0.175) +
+  geom_linerange(aes(x = M2, ymin = lb, ymax = ub), size = 0.3) +
+  scale_x_continuous(name = "Restrictions") +   
+  scale_color_manual(labels = c("Robust Confidence Interval", "Original"), 
+                     values = c("#FC4E07", "#0CAFBB")) +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Source Sans 3"),
+    panel.border = element_rect(color = "black", linewidth = 0.45),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 0.01, r = 0.05, b = 0.075, l = 0.05, unit = "in"),
+    axis.title.x = element_text(color = "black", size = 6.75, 
+                                margin = margin(0.125, 0, 0, 0, "in")),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.2),
+    axis.ticks.x = element_line(color = "black", linewidth = 0.2),
+    axis.text.y = element_text(color = "black", size = 6.75),
+    axis.text.x = element_text(color = "black", size = 6.75),
+    strip.placement = "outside",
+    strip.text = element_text(color = "black", size = 6.75),
+    strip.text.y.left = element_text(angle = 0, hjust = 0, 
+                                     margin = margin(t = 0, r = 0, 
+                                                     b = 0, l = 0, "in")),
+    strip.text.x = element_text(margin = margin(0.05, 0, 0.05, 0, "in")),
+    strip.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 6.25),
+    legend.key.size = unit(0.15, "in"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+    legend.position = c(0.08, -0.175)) +
+  guides(col = guide_legend(nrow = 1, reverse = TRUE)) # Reverse legend order
+
+# Vector file
+pdf("./graph/fig_b_05_did_honest_avg.pdf", 
+#pdf("./graph/fig_b_05_did_honest_e0.pdf", 
+    width = 5, height = 4)
+print(plot)
+dev.off()
+
+write_xlsx(plot.hon %>%
+  ungroup() %>%
+  filter(estimand == "avg") %>%
+  select(outcome, outcome2, type, M,
+         method, point_est, lb, ub) %>%
+  mutate(M = if_else(method == "Original", NA, M)),
+  "./output/public/fig_b_06_did_honest.xlsx")
+
+```
+<br>
+
+# Log close
+<br>
+```{r log_close}
+
+# Log close
+log_close(footer = TRUE)
+writeLines(readLines(logrecord))
+
+```
+<br>

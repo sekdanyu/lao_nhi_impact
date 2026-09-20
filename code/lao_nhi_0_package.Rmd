@@ -1,0 +1,124 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Install and load packages
+<br>
+```{r packages}
+
+# Set working directory
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# List of required packages
+pkg <- c(
+         # Set up
+         "rstudioapi",          # API for interacting with RStudio
+         "remotes",             # Install R packages from other sources
+         "devtools",            # Development tools for R packages
+         "foreign",             # Reading / writing data from other software
+         "rlang",               # Tidy evaluation tools
+
+         # Data wrangling
+         "BMisc",               # Miscellaneous tools for data manipulation
+         "tidyverse",           # Data science packages (incl. ggplot2)
+         "tinytex",             # Tools for LaTeX compilation
+         "tidylog",             # Logs tidyverse operations
+         "forecast",            # Time series forecasting
+         "lubridate",           # Handling dates and times
+         "broom",               # Tidying model outputs
+         "FreqProf",            # Frequency profiles
+         "arsenal",             # Comparing data frames
+         
+         # DID analysis (Difference-in-Differences)
+         "fixest",              # Fixed effects regression
+         "plm",                 # Linear models for panel data
+         "lmtest",              # Testing linear regression models
+         "did",                 # DID - Callaway & Sant’Anna (2021)
+         "DRDID",               # Doubly robust estimator for DID
+         "did2s",               # DID - Gardner (2021)
+         "didimputation",       # DID - Borusyak, Jaravel, & Spiess (2024)
+         "TwoWayFEWeights",     # DID - de Chaisemartin & D'Haultfoeuille (2020)
+         "etwfe",               # DID - Woolridge (2021)
+         "HonestDiD",           # HonestDiD - Rambachan and Roth (2023)
+         "bacondecomp",         # Bacon decomposition for DID (2021)
+         "WeightIt",            # Propensity score weighting
+         "cobalt",              # Covariate balance tables and plots
+         "sandwich",            # Robust covariance matrix estimators
+         "clubSandwich",        # Cluster-robust variance estimators
+         "meta",                # General package for meta-analysis
+
+         # Graphics
+         "ggh4x",               # ggplot2 extension
+         "ggtext",              # Markdown/HTML text in plots
+         "gridExtra",           # Functions for 'Grid' graphics
+         "showtext",            # Easy font management
+         "extrafont",           # Font support for PDF or PostScript
+         "sysfonts",            # Access to system and Google fonts
+         "MetBrewer",           # Color themes from Met museum
+         "RColorBrewer",        # Color palettes for visualizations
+         "patchwork",           # Combine multiple ggplot2 plots
+         "cowplot",             # Combine and align multiple ggplot2 plots
+         "sf",                  # Spatial (geographic) data
+
+         # Output
+         "gtsummary",           # Summary tables generation
+         "flextable",           # Tables for reporting and publications
+         "officer",             # Manipulate Word documents (.docx)
+         "Rfast",               # Fast statistical functions
+         "styler",              # Code formatting
+         "logr",                # Logging outputs
+         "rmarkdown",           # Dynamic report generation
+         "knitr",               # R Markdown knitting
+         "writexl",             # Writing Excel files
+         "openxlsx"             # Create, write and formal Excel files
+)
+
+# Function to load required packages and install missing ones
+load_or_install <- function(pkg) {
+  new.pkg <- pkg[!(pkg %in% installed.packages())]
+  if (length(new.pkg)) {
+    install.packages(new.pkg, repos = "http://cran.rstudio.com")
+  }
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# Load or install packages
+load_or_install(pkg)
+
+# Others
+library(readxl)        # Read excel file
+library(sysfonts)
+library(showtext)
+
+font_add_google("Source Sans 3", "Source Sans 3")
+#font_add("Times New Roman", regular = "/System/Library/Fonts/Supplemental/Times New Roman.ttf")
+
+# font_dir <- path.expand("~/Library/Fonts")
+# if (file.exists(file.path(font_dir, "SourceSans3-Regular.ttf"))) {
+#   font_add(family = "Source Sans 3",
+#            regular = file.path(font_dir, "SourceSans3-Regular.ttf"))
+# } else {
+#   font_add_google("Source Sans 3", "Source Sans 3")
+# }
+showtext_auto()
+
+# Font for PDF graphs ("extrafont")
+#font_import(pattern = "SourceSansPro", prompt = FALSE)  # only once
+#font_import(pattern = "SourceSans3", prompt = FALSE)  # only once
+loadfonts(device = "pdf")
+
+# Warnings to be displayed
+options(nwarnings = 10000)
+options()$nwarnings
+
+# Generate R script
+knitr::purl("lao_nhi_0_package.Rmd", output = "lao_nhi_0_package.R")
+
+
+```
+<br>

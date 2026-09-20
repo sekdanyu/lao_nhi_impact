@@ -1,0 +1,742 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Setup
+<br>
+```{r setup}
+
+# Set working directory
+rm(list = ls(all.names = TRUE))
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# Install and load packages
+source("lao_nhi_0_package.r", echo = TRUE)
+
+# Create directories
+if(!dir.exists("./log")) {dir.create("./log")}
+
+# Log
+logpath <- file.path(getwd(), "log", "lao_nhi_4_did_qrt_facl.log")
+logrecord <- log_open(logpath, autolog = TRUE, show_notes = FALSE)
+log_code()
+
+```
+<br>
+
+# Load data
+<br>
+```{r load}
+
+data.cln <- read_excel("./data export/02_clean_8_cln_q_fl.xlsx") # district
+warnings()
+str(data.cln)
+
+data <- data.cln
+
+# Check number of districts
+data %>%
+ filter(faclevel != "PH") %>%
+ summarise(count = n_distinct(district))  # total districts; 148
+
+data %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ summarise(count = n_distinct(district))  # total districts with NHI; 139
+
+data %>%
+ group_by(province) %>%
+ filter(faclevel != "PH") %>%
+ summarise(count = n_distinct(district))
+
+data %>%
+ group_by(province, district) %>%
+ summarise(n = n()) %>%
+ print(n = Inf)
+
+# Drop pilot districts and PH
+data <- data %>%
+ filter(
+   !(province %in% c("15 Xekong")),  # Drop NHI pilot province
+   !(district %in% c("1008 Met", "1009 Viangkham", "1011 Mun",
+                     "1306 Nong", "1408 Samouay")),  # Drop NHI pilot districts
+   !(district %in% c("1000 PH Vientiane")), # Drop Viangkham district PH
+   !(district %in% c("0201 Phongsali")),  # Drop district without CU5 in Q4/2015
+   !(quarter %in% c("2015.1", "2015.2", "2015.3")))  # Quarters to drop
+ 
+data %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ summarise(count = n_distinct(district))  # districts in final analyses;
+# 129 districts
+
+# Number of health facilities at event = 0
+data %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ filter(event == 0) %>%
+ group_by(faclevel) %>%
+ summarise(count = n_distinct(district),
+           sum = sum(facnum, na.rm = TRUE))
+# 129 districts
+# (116 district with district hospitals + 13 districts without district hospital)
+# (945-116+91 = 920 health centers)
+
+# District with PH or HC only
+# PH: XX00
+# PSL 0205 Bounnua: HC only
+# LNT 0301 Namtha: HC only
+# ODX 0401 Xai: HC only
+# BKO
+# LPG
+# HPN 0701 Xamnua: HC only
+# XYB 0801 Xainyabouli: HC only
+# XKG 0901 Pek: HC only
+# VTP
+# BKX 1101 Pakxan: HC only
+# KMN 1201 Thakhek: HC only
+# SVK 1301 Kaysone Phomvihane: HC only
+# SRV 1401 Salavan: HC only 
+# SEK 1501 Lamam: HC only
+# CPS 1601 Pakxe: HC only 
+# ATP 1702 Samakhixai: HC only 
+# XSB 1801 Anouvong: HC only 
+
+# 1210 Khounkham - excluded in the facility-level analysis but included in district-level analyses
+
+# Create directories
+if(!dir.exists("./output")) {dir.create("./output")}
+if(!dir.exists("./output/q_facl")) {dir.create("./output/q_facl")}
+outpath <- c("./output/q_facl/")
+
+```
+<br>
+
+# Data by facility type
+<br>
+```{r data}
+
+# ------------------------------------------------------------------------------
+# All (all: PH + DH + HC) - count only
+# ------------------------------------------------------------------------------
+
+if(!dir.exists(paste0(outpath, "all"))) {dir.create(paste0(outpath, "all"))}
+
+data_all <- data %>%
+  mutate(
+    dnum = case_when(
+      pnum == 2 & faclevel == "PH" ~ 205,
+      pnum == 3 & faclevel == "PH" ~ 301,
+      pnum == 4 & faclevel == "PH" ~ 401,
+      pnum == 5 & faclevel == "PH" ~ 501,
+      pnum == 6 & faclevel == "PH" ~ 601,
+      pnum == 7 & faclevel == "PH" ~ 701,
+      pnum == 8 & faclevel == "PH" ~ 801,
+      pnum == 9 & faclevel == "PH" ~ 901,
+      # pnum == 10 & faclevel == "PH" ~ 1009, # already dropped (pilot district)
+      pnum == 11 & faclevel == "PH" ~ 1101,
+      pnum == 12 & faclevel == "PH" ~ 1201,
+      pnum == 13 & faclevel == "PH" ~ 1301,
+      pnum == 14 & faclevel == "PH" ~ 1401,
+      pnum == 15 & faclevel == "PH" ~ 1501,
+      pnum == 16 & faclevel == "PH" ~ 1601,
+      pnum == 17 & faclevel == "PH" ~ 1702,
+      pnum == 18 & faclevel == "PH" ~ 1801,
+      TRUE ~ dnum)) %>%
+  group_by(province, year, quarter, pnum, dnum,
+           time, group, treat, event) %>%
+  summarise_at(c("opo5", "opu5", "ipo5", "ipu5", "ipday",
+                 "smsrgo5", "smsrgu5",
+                 "anc", "pnc", "del",
+                 "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+                 "smsrgo5.raw", "smsrgu5.raw",
+                 "anc.raw", "pnc.raw", "del.raw",
+                 "facnum"),
+               sum, na.rm = TRUE) %>%
+  ungroup() %>%
+  mutate(lopo5  = ifelse(opo5  > 0, log(opo5),  NA_real_),
+         lopu5  = ifelse(opu5  > 0, log(opu5),  NA_real_),
+         lipo5  = ifelse(ipo5  > 0, log(ipo5),  NA_real_),
+         lipu5  = ifelse(ipu5  > 0, log(ipu5),  NA_real_),
+         lipday = ifelse(ipday > 0, log(ipday), NA_real_),
+         ldel   = ifelse(del   > 0, log(del),   NA_real_)) %>%
+  arrange(province, dnum, quarter) %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital") %>%
+  mutate(treat = ifelse(group == max(group), 0, treat),
+         group = ifelse(group == max(group), 0, group),
+         dnum2 = as.numeric(dnum))
+
+head(data_all)
+
+# 1210 Khounkham included
+
+pvty_d <- read_excel("./data import/lao_poverty_2015.xlsx", 
+                     sheet = "Lao Poverty 2015 by district") %>%
+  dplyr::select(dnum, Poverty_He, Poverty_Ga, Poverty_Se, Improved_S, 
+                Lit_rate_1564old, Self_employment_rate, Urban_popu, Area) %>%
+  mutate(across(Poverty_He:Urban_popu, ~ .x / 100)) %>%
+  rename(dnum = dnum,
+         pov_he = Poverty_He,
+         pov_ga = Poverty_Ga,
+         pov_se = Poverty_Se,
+         imps = Improved_S,
+         litr = Lit_rate_1564old,
+         semp = Self_employment_rate,
+         urba = Urban_popu,
+         area = Area)
+
+data_all <- left_join(data_all, pvty_d, by = c("dnum"))
+
+data_all %>% 
+  summarise(count = n_distinct(dnum)) # included districts; 129
+
+# ------------------------------------------------------------------------------
+# Hospital (hos: PH + DH)
+# ------------------------------------------------------------------------------
+
+if(!dir.exists(paste0(outpath, "hos"))) {dir.create(paste0(outpath, "hos"))}
+
+data_hos <- data %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital",
+         factype == "hos",
+         district != "1210 Khounkham") %>%  # drop unbalanced data
+  mutate(treat = ifelse(group == max(group), 0, treat),
+         group = ifelse(group == max(group), 0, group),
+         ipo5 = if_else(district == "0202 Mai", NA_real_, ipo5),
+         dnum2 = as.numeric(dnum))
+head(data_hos)
+
+# 1210 Khounkham: DH newly built in 2017 -> dropped
+# 1600 Champasak: ipday NA
+# 0202 Mai: ipo5 is zero (due to deduction) -> change to NA
+
+data_hos %>%
+  summarise(count = n_distinct(district)) # included districts; 130
+
+# ------------------------------------------------------------------------------
+# Hospital (DH only)
+# ------------------------------------------------------------------------------
+
+if(!dir.exists(paste0(outpath, "dh"))) {dir.create(paste0(outpath, "dh"))}
+
+data_dh <- data %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital",
+         faclevel == "DH",
+         district != "1210 Khounkham") %>% # drop unbalanced data
+  mutate(treat = ifelse(group == max(group), 0, treat),
+         group = ifelse(group == max(group), 0, group),
+         ipo5 = if_else(district == "0202 Mai", NA_real_, ipo5),
+         dnum2 = as.numeric(dnum))
+head(data_dh)
+
+# 1210 DH Khounkham: DH newly built in 2017 -> dropped
+# 0202 Mai: ipo5 is zero (due to deduction) -> change to NA
+
+data_dh %>%
+  summarise(count = n_distinct(district)) # included districts; 115
+
+# ------------------------------------------------------------------------------
+# Health Center (HC) - aggregated at the district level
+# ------------------------------------------------------------------------------
+
+if(!dir.exists(paste0(outpath, "hc"))) {dir.create(paste0(outpath, "hc"))}
+
+data_hc <- data %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital",
+         faclevel == "HC") %>%
+  mutate(treat = ifelse(group == max(group), 0, treat),
+         group = ifelse(group == max(group), 0, group),
+         dnum2 = as.numeric(dnum))
+head(data_hc)
+
+data_hc %>%
+  summarise(count = n_distinct(district)) # included districts; 129
+
+# ------------------------------------------------------------------------------
+# Health Center (HC) - individual facilities
+# ------------------------------------------------------------------------------
+
+if(!dir.exists(paste0(outpath, "fac"))) {dir.create(paste0(outpath, "fac"))}
+
+data.q.fac <- read_excel("./data export/02_clean_7_q_fac.xlsx") # district
+warnings()
+str(data.q.fac)
+
+# Number of health facilities per district
+data.q.fac %>%
+ group_by(province, district) %>%
+ summarise(n = n()/max(time)) %>%
+ print(n = Inf)
+
+# Drop pilot districts and PH
+data.q.fac <- data.q.fac %>%
+ filter(
+   !(province %in% c("15 Xekong")),  # Drop NHI pilot province
+   !(district %in% c("1008 Met", "1009 Viangkham", "1011 Mun",
+                     "1306 Nong", "1408 Samouay")),  # Drop NHI pilot districts
+   !(district %in% c("1000 PH Vientiane")), # Drop Viangkham district PH
+   !(district %in% c("0201 Phongsali")),  # Drop district without CU5 in Q4/2015
+   !(quarter %in% c("2015.1", "2015.2", "2015.3")))  # Quarters to drop
+ 
+data.q.fac %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ summarise(count = n_distinct(district))  # districts in final analyses;
+# 129 districts
+
+# Number of health facilities at event = 0
+data.q.fac %>%
+ filter(
+   faclevel != "PH", 
+   treat == 1, 
+   event == 0) %>%
+ group_by(faclevel) %>%
+ summarise(count = n_distinct(district),
+           sum = sum(facnum, na.rm = TRUE))
+
+# Analysis data
+data_fac <- data.q.fac %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital",
+         faclevel == "HC") %>%
+  mutate(treat = ifelse(group == max(group), 0, treat),
+         group = ifelse(group == max(group), 0, group),
+         dnum2 = as.numeric(dnum),
+         dnum = as.numeric(factor(faccode)))
+
+head(data_fac)
+
+data_fac %>%
+  summarise(count = n_distinct(district)) # included districts; 129
+
+# ------------------------------------------------------------------------------
+# Combine
+data.flv <- list(data_all, data_hos, data_dh, data_hc, data_fac)
+
+
+```
+
+# Difference-in-differences: Callaway and Sant'Anna (2021)
+<br>
+```{r csdid}
+
+flevel <- c("all", "hos", "dh", "hc", "fac")
+
+# Covariates
+covariate_all <- ~facnum + semp + urba + litr + imps
+covariate_hos <- ~semp + urba + litr + imps # hospital = 1
+covariate_dh <- ~semp + urba + litr + imps # hospital = 1
+covariate_hc <- ~facnum + semp + urba + litr + imps
+covariate_fac <- ~1
+covariate <- list(covariate_all, covariate_hos, covariate_dh, 
+                  covariate_hc, covariate_fac)
+
+outname <- c(
+  
+  # count
+  "opo5", "opu5", "ipo5", "ipu5", "ipday", "del",
+  
+  # rate
+  "opo5r", "opu5r", "ipo5r", "ipu5r", "iplos", "delr",
+  # "opipo5r", "opipu5r"
+  
+  # log-count
+  "lopo5", "lopu5", "lipo5", "lipu5", "lipday", "ldel"
+)
+
+for (h in 1:length(flevel)) {
+for (i in 1:length(outname)) {
+
+  # Skip outcome variable not available in the dataset
+  if (!(outname[i] %in% names(data.flv[[h]]))) {
+  message(paste("Skipping", outname[i], "- not in dataset"))
+  next
+  }
+  
+  set.seed(55555)
+
+# ------------------------------------------------------------------------------
+# Varying pre-period
+# ------------------------------------------------------------------------------
+
+sep(outname[i])
+
+# Base
+v <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+            gname = "group", control_group = "notyettreated",
+            base_period = "varying",  # reference point varies for pre-NHI period
+            est_method = "dr",  # w/o covariate -> outcome regression
+            xformla = NULL, panel = TRUE, bstrap = TRUE, cband = TRUE,
+            data = data.flv[[h]])
+glance(v)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- v", "- att")) %>% put()
+v %>% put()
+warnings()
+
+# SE clustered at provincial level
+v.cls <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                gname = "group", control_group = "notyettreated",
+                base_period = "varying",  # reference point varies for pre-NHI period
+                est_method = "dr", clustervars = "pnum",
+                xformla = NULL, panel = TRUE, bstrap = TRUE, 
+                cband = TRUE, data = data.flv[[h]])
+glance(v.cls)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- v.cls", "- att")) %>% put()
+v.cls %>% put()
+warnings()
+
+# w/ covariates, base
+vc <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+             gname = "group", control_group = "notyettreated",
+             base_period = "varying",  # varying reference point
+             est_method = "dr",
+             xformla = covariate[[h]], panel = TRUE, bstrap = TRUE, 
+             cband = TRUE, data = data.flv[[h]])
+glance(vc)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc", "- att")) %>% put()
+vc %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level 
+vc.cls.p <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate[[h]], panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data.flv[[h]])
+glance(vc.cls.p)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.p", "- att")) %>% put()
+vc.cls.p %>% put()
+warnings()
+
+# w/ covariates, SE clustered at district level 
+vc.cls.d <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "dnum2",
+                 xformla = covariate[[h]], panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data.flv[[h]])
+glance(vc.cls.d)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.d", "- att")) %>% put()
+vc.cls.d %>% put()
+warnings()
+
+# ------------------------------------------------------------------------------
+# Universal pre-period
+# ------------------------------------------------------------------------------
+
+# Base
+u <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+            gname = "group", control_group = "notyettreated",
+            base_period = "universal",  # reference point fixed for pre-NHI period
+            est_method = "dr",
+            xformla = NULL, panel = TRUE, bstrap = TRUE, 
+            cband = TRUE, data = data.flv[h])
+glance(u)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- u", "- att")) %>% put()
+u %>% put()
+warnings()
+
+# SE clustered at provincial level
+u.cls <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                gname = "group", control_group = "notyettreated",
+                base_period = "universal",  # reference point fixed for pre-NHI period
+                est_method = "dr", clustervars = "pnum",
+                xformla = NULL, panel = TRUE, bstrap = TRUE, 
+                cband = TRUE, data = data.flv[h])
+glance(u.cls)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- u.cls", "- att")) %>% put()
+u.cls %>% put()
+warnings()
+
+# w/ covariates, Universal pre-period
+uc <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+             gname = "group", control_group = "notyettreated",
+             base_period = "universal",  # fixed reference point
+             est_method = "dr",
+             xformla = covariate[[h]], panel = TRUE, bstrap = TRUE, 
+             cband = TRUE, data = data.flv[h])
+glance(uc)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc", "- att")) %>% put()
+uc %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level
+uc.cls.p <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate[[h]], panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data.flv[h])
+glance(uc.cls.p)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.p", "- att")) %>% put()
+uc.cls.p %>% put()
+warnings()
+
+# w/ covariates, SE clustered at district level
+uc.cls.d <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "dnum2",
+                 xformla = covariate[[h]], panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data.flv[h])
+glance(uc.cls.d)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.d", "- att")) %>% put()
+uc.cls.d %>% put()
+warnings()
+
+listv <- c("v", "v.cls", "vc", "vc.cls.p", "vc.cls.d")
+attgt_list_v <- lapply(listv, get)
+
+listu <- c("u", "u.cls", "uc", "uc.cls.p", "uc.cls.d")
+attgt_list_u <- lapply(listu, get)
+
+# ------------------------------------------------------------------------------
+# Tidy the results and export to Excel file
+# ------------------------------------------------------------------------------
+
+outn <- rlang::sym(outname[i])
+ 
+preevent <- data.flv[[h]] %>%
+ filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+ mutate(avgunit = mean(!!outn, na.rm = TRUE)) %>%  # simple average of units
+ group_by(group) %>%  # grouping to reflect group-time ATT
+ mutate(avggrp = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average of units by group
+ dplyr::select(c("group", "avgunit", "avggrp")) %>%
+ mutate(avgdyn = mean(avggrp)) %>%  # averaging of averages # same weighted avg output
+ unique
+
+attgt_tidy_v <- list()
+for (j in 1:length(listv)) {
+ attgt_tidy_v[[j]] <- tidy(attgt_list_v[[j]])
+ attgt_tidy_v[[j]]$ptapval <- c(attgt_list_v[[j]]$Wpval)
+ attgt_tidy_v[[j]]$name <- listv[j]
+ attgt_tidy_v[[j]] <- left_join(attgt_tidy_v[[j]], preevent, by = c("group"))
+ attgt_tidy_v[[j]]$change <- attgt_tidy_v[[j]]$estimate / attgt_tidy_v[[j]]$avggrp
+ # baseline utilization is t = -1. Not correct for anticipation effect results
+}
+
+attgt_tidy_v_frame <- bind_rows(attgt_tidy_v)
+attgt_tidy_v_frame$pretrendtype <- "varying"
+
+attgt_tidy_u <- list()
+for (j in 1:length(listu)) {
+ attgt_tidy_u[[j]] <- tidy(attgt_list_u[[j]])
+ attgt_tidy_u[[j]]$ptapval <- c(attgt_list_u[[j]]$Wpval)
+ attgt_tidy_u[[j]]$name <- listu[j]
+ attgt_tidy_u[[j]] <- left_join(attgt_tidy_u[[j]], preevent, by = c("group"))
+ attgt_tidy_u[[j]]$change <- attgt_tidy_u[[j]]$estimate / attgt_tidy_u[[j]]$avggrp
+ # baseline utilization is t = -1. Not correct for anticipation effect results
+}
+
+attgt_tidy_u_frame <- bind_rows(attgt_tidy_u)
+attgt_tidy_u_frame$pretrendtype <- "fixed"
+
+attgt_tidy_frame <- rbind(attgt_tidy_v_frame, attgt_tidy_u_frame)
+attgt_tidy_frame$outcome <- outname[i]
+
+write_xlsx(attgt_tidy_frame,
+           paste0(outpath, flevel[h], "/", outname[i], "_attgt_", flevel[h], ".xlsx"))
+
+# ------------------------------------------------------------------------------
+# Aggregate the gt-ATT's by desired dimension
+# ------------------------------------------------------------------------------
+
+# Varying period
+
+sep("Varying period, Simple")
+
+sim_v <- list()  # single treatment effect
+aggte_sim_v <- list()
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- sim")) %>% put()
+ sim_v[[k]] <- aggte(attgt_list_v[[k]], type = "simple", na.rm = TRUE) %>% put()
+ print(sim_v[[k]])
+ # warnings()
+ aggte_sim_v[[k]] <- tidy(sim_v[[k]])
+ aggte_sim_v[[k]]$name <- listv[k]
+}
+
+aggte_sim_v_frame <- bind_rows(aggte_sim_v)
+aggte_sim_v_frame <- aggte_sim_v_frame %>%
+ mutate(pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Group")
+
+grp_v <- list()  # group specific treatment effect
+aggte_grp_v <- list()
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- grp")) %>% put()
+ grp_v[[k]] <- aggte(attgt_list_v[[k]], type = "group", na.rm = TRUE) %>% put()
+ print(grp_v[[k]])
+ # warnings()
+ aggte_grp_v[[k]] <- tidy(grp_v[[k]])
+ aggte_grp_v[[k]]$name <- listv[k]
+}
+
+aggte_grp_v_frame <- bind_rows(aggte_grp_v)
+preevent$group  <- as.character(preevent$group)
+
+aggte_grp_v_frame <- aggte_grp_v_frame %>%
+ left_join(preevent, by = c("group")) %>%
+ mutate(change = estimate / avggrp,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Dynamic")
+
+# No event time balancing
+dyn_v <- list() # dynamic treatment effect (event study)
+aggte_dyn_v <- list()
+
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- dyn")) %>% put()
+ dyn_v[[k]] <- aggte(attgt_list_v[[k]], type = "dynamic", 
+                     balance_e = NULL, na.rm = TRUE) %>% put()
+ print(dyn_v[[k]])
+ # warnings()
+  
+ dyn_frame <- tidy(dyn_v[[k]]) %>% 
+   mutate(overall.att = dyn_v[[k]]$overall.att,
+          overall.se = dyn_v[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listv[k])      
+ aggte_dyn_v[[k]] <- dyn_frame
+}
+
+aggte_dyn_v_frame <- bind_rows(aggte_dyn_v)
+aggte_dyn_v_frame <- aggte_dyn_v_frame %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+# Universal, fixed period
+
+sep("Universal (fixed) period, Simple")
+
+sim_u <- list() # single treatment effect
+aggte_sim_u <- list()
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- sim")) %>% put()
+ sim_u[[k]] <- aggte(attgt_list_u[[k]], type = "simple", na.rm = TRUE) %>% put()
+ print(sim_u[[k]])
+ # warnings()
+ aggte_sim_u[[k]] <- tidy(sim_u[[k]])
+ aggte_sim_u[[k]]$name <- listu[k]
+}
+
+aggte_sim_u_frame <- bind_rows(aggte_sim_u)
+aggte_sim_u_frame <- aggte_sim_u_frame %>%
+ mutate(pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Group")
+
+grp_u <- list() # group specific treatment effect
+aggte_grp_u <- list()
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- grp")) %>% put()
+ grp_u[[k]] <- aggte(attgt_list_u[[k]], type = "group", na.rm = TRUE) %>% put()
+ print(grp_u[[k]])
+ # warnings()
+ aggte_grp_u[[k]] <- tidy(grp_u[[k]])
+ aggte_grp_u[[k]]$name <- listu[k]
+}
+
+aggte_grp_u_frame <- bind_rows(aggte_grp_u)
+preevent$group  <- as.character(preevent$group)
+aggte_grp_u_frame <- aggte_grp_u_frame %>%
+ left_join(preevent, by = c("group")) %>%
+ mutate(change = estimate / avggrp,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Dynamic")
+
+# No event time balancing
+dyn_u <- list() # dynamic treatment effect (event study)
+aggte_dyn_u <- list()
+
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- dyn")) %>% put()
+ dyn_u[[k]] <- aggte(attgt_list_u[[k]], type = "dynamic", 
+                     balance_e = NULL, na.rm = TRUE) %>% put()
+ print(dyn_u[[k]])
+ # warnings()
+
+ dyn_frame <- tidy(dyn_u[[k]]) %>%
+   mutate(overall.att = dyn_u[[k]]$overall.att,
+          overall.se = dyn_u[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listu[k])
+ aggte_dyn_u[[k]] <- dyn_frame
+}
+
+aggte_dyn_u_frame <- bind_rows(aggte_dyn_u)
+aggte_dyn_u_frame <- aggte_dyn_u_frame %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+aggte_sim_frame <- rbind(aggte_sim_v_frame, aggte_sim_u_frame)
+aggte_grp_frame <- rbind(aggte_grp_v_frame, aggte_grp_u_frame)
+aggte_dyn_frame <- rbind(aggte_dyn_v_frame, aggte_dyn_u_frame)
+
+write_xlsx(aggte_sim_frame,
+           paste0(outpath, flevel[h], "/", outname[i], "_aggte_sim_", 
+                  flevel[h], ".xlsx"))
+
+write_xlsx(aggte_grp_frame,
+           paste0(outpath, flevel[h], "/", outname[i], "_aggte_grp_", 
+                  flevel[h], ".xlsx"))
+
+write_xlsx(aggte_dyn_frame,
+           paste0(outpath, flevel[h], "/", outname[i], "_aggte_dyn_", 
+                  flevel[h], ".xlsx"))
+}}
+
+```
+<br>
+
+# Log close
+<br>
+```{r log_close}
+
+# Log close
+log_close(footer = TRUE)
+writeLines(readLines(logrecord))
+
+```
+<br>

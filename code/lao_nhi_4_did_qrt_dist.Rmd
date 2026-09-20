@@ -1,0 +1,3021 @@
+---
+title: "The impact of national health insurance on health services utilization in Lao People's Democratic Republic (Lao PDR)"
+author: "Sekeun Daniel Yu (yus109@mcmaster.ca), Michel Grignon, Godefroy Emmanuel Guindon, Jean-Éric Tarride"
+date: "September/2026"
+---
+
+# Setup
+<br>
+```{r setup}
+
+# Set working directory
+rm(list = ls(all.names = TRUE))
+#install.packages("rstudioapi")
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+getwd()
+
+# Install and load packages
+source("lao_nhi_0_package.r", echo = TRUE)
+
+packageVersion("DRDID")         # 1.3.0
+packageVersion("did")           # 2.5.1
+packageVersion("fixest")        # 0.14.2
+packageVersion("did2s")         # 1.2.1
+packageVersion("etwfe")         # 0.6.2
+packageVersion("bacondecomp")   # 0.1.1
+packageVersion("HonestDiD")     # 0.2.8
+
+# Create directories
+if(!dir.exists("./log")) {dir.create("./log")}
+
+# Log
+logpath <- file.path(getwd(), "log", "lao_nhi_4_did_qrt_dist.log")
+logrecord <- log_open(logpath, autolog = TRUE, show_notes = FALSE)
+log_code()
+
+```
+<br>
+
+# Load data
+<br>
+```{r load}
+
+data.cln <- read_excel("./data export/02_clean_8_cln_q_dl.xlsx") # district
+warnings()
+str(data.cln)
+
+data <- data.cln
+
+# Check number of districts
+data %>%
+ filter(faclevel != "PH") %>%
+ summarise(count = n_distinct(district))  # total districts; 148
+
+data %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ summarise(count = n_distinct(district))  # total districts with NHI; 139
+
+data %>%
+ group_by(province) %>%
+ filter(faclevel != "PH") %>%
+ summarise(count = n_distinct(district))
+
+data %>%
+ group_by(province, district) %>%
+ summarise(n = n()) %>%
+ print(n = Inf)
+
+# Number of health facilities at 2015.4
+data %>%
+ filter(quarter %in% c("2015.4")) %>%
+ group_by(faclevel) %>%
+ summarise(count = n_distinct(district),
+           sum = sum(facnum, na.rm = TRUE))
+# 148 districts
+# (134 district with district hospitals + 14 districts without district hospital)
+# (1017-134+100 = 983 health centers)
+
+# Drop pilot districts and PH
+data <- data %>%
+ filter(
+   !(province %in% c("15 Xekong")),  # Drop NHI pilot province
+   !(district %in% c("1008 Met", "1009 Viangkham", "1011 Mun",
+                     "1306 Nong", "1408 Samouay")),  # Drop NHI pilot districts
+   !(district %in% c("0201 Phongsali")),  # Drop district without CU5 in Q4/2015
+   !str_detect(faclevel, "PH"),  # Remove provincial hospitals
+   !(quarter %in% c("2015.1", "2015.2", "2015.3")))  # Quarters to drop
+ 
+data %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ summarise(count = n_distinct(district))  # districts in final analyses;
+# 129 districts
+
+# Number of health facilities at event = 0
+data %>%
+ filter(faclevel != "PH", treat == 1) %>%
+ filter(event == 0) %>%
+ group_by(faclevel) %>%
+ summarise(count = n_distinct(district),
+           sum = sum(facnum, na.rm = TRUE))
+# 129 districts
+# (116 district with district hospitals + 13 districts without district hospital)
+# (945-116+91 = 920 health centers)
+
+# District with PH or HC only
+# PH: XX00
+# PSL 0205 Bounnua: HC only
+# LNT 0301 Namtha: HC only
+# ODX 0401 Xai: HC only
+# BKO
+# LPG
+# HPN 0701 Xamnua: HC only
+# XYB 0801 Xainyabouli: HC only
+# XKG 0901 Pek: HC only
+# VTP
+# BKX 1101 Pakxan: HC only
+# KMN 1201 Thakhek: HC only
+# SVK 1301 Kaysone Phomvihane: HC only
+# SRV 1401 Salavan: HC only 
+# SEK 1501 Lamam: HC only
+# CPS 1601 Pakxe: HC only 
+# ATP 1702 Samakhixai: HC only 
+# XSB 1801 Anouvong: HC only 
+
+# 1210 Khounkham - excluded in the facility-level analysis but included in district-level analyses
+# 1201 Thakhek - ipday NA
+
+# Excluding these 12 districts with HC only (due to the presence of PH), increases the DID estimates by about 0.05 points.
+#data <- subset(data,District!="0205 Bounnua") # HC only
+#data <- subset(data,District!="0301 Namtha") # HC only
+#data <- subset(data,District!="0401 Xai") # HC only
+#data <- subset(data,District!="0701 Xamnua") # HC only
+#data <- subset(data,District!="0801 Xainyabouli") # HC only
+#data <- subset(data,District!="0901 Pek") # HC only
+#data <- subset(data,District!="1201 Thakhek") # HC only
+#data <- subset(data,District!="1301 Kaysone Phomvihane") # HC only
+#data <- subset(data,District!="1401 Salavan") # HC only
+#data <- subset(data,District!="1601 Pakxe") # HC only
+#data <- subset(data,District!="1702 Samakhixai") # HC only
+#data <- subset(data,District!="1801 Anouvong") # HC only
+
+# Merge zero imputation data
+# data.zero <- read_excel("./data export/zeroimpute/02_clean_8_cln_q_dl_zero.xlsx")
+# data <- data %>% 
+#   left_join(data.zero %>% 
+#               dplyr::select(dnum, time, opo5r.zero, opu5r.zero, ipo5r.zero, 
+#                      ipu5r.zero, iplos.zero, delr.zero), 
+#             by = c("dnum", "time"))
+
+# Create directories
+if(!dir.exists("./output")) {dir.create("./output")}
+if(!dir.exists("./output/q_disl")) {dir.create("./output/q_disl")}
+outpath <- c("./output/q_disl/")
+
+```
+<br>
+
+# B7. Robustness checks (Honest DiD)
+<br>
+```{r honest}
+
+# HonestDiD -> https://github.com/asheshrambachan/HonestDiD
+# An Honest Approach to Parallel Trends.
+# Install remotes package if not installed
+# install.packages("remotes") 
+Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
+if (!requireNamespace("HonestDiD", quietly = TRUE)) {
+  if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes")}
+
+  remotes::install_github(
+    "asheshrambachan/HonestDiD",
+    dependencies = TRUE,
+    upgrade = "never")}
+
+library(HonestDiD)
+
+# https://github.com/asheshrambachan/HonestDiD (Callaway and Sant’Anna)
+#' https://github.com/pedrohcgs/CS_RR
+
+
+# ------------------------------------------------------------------------------
+# Treatment effects at a selected event time (default: e = 0)
+# ------------------------------------------------------------------------------
+
+#' @title honest_did_cluster_boot
+#'
+#' @description a function to compute a sensitivity analysis
+#'  using the approach of Rambachan and Roth (2021)
+#'
+#' @param ... Parameters to pass to the relevant method.
+honest_did_cluster_boot <- function(...) UseMethod("honest_did_cluster_boot")
+
+#' @title honest_did_cluster_boot.AGGTEobj
+#'
+#' @description a function to compute a sensitivity analysis
+#'  using the approach of Rambachan and Roth (2021) when
+#'  the event study is estimating using the `did` package
+#'
+#' @param es Result from aggte (object of class AGGTEobj).
+#' @param e event time to compute the sensitivity analysis for.
+#'  The default value is `e=0` corresponding to the "on impact"
+#'  effect of participating in the treatment.
+#' @param type Options are "smoothness" (which conducts a
+#'  sensitivity analysis allowing for violations of linear trends
+#'  in pre-treatment periods) or "relative_magnitude" (which
+#'  conducts a sensitivity analysis based on the relative magnitudes
+#'  of deviations from parallel trends in pre-treatment periods).
+#' @param gridPoints Number of grid points used for the underlying test
+#'  inversion. Default equals 100. User may wish to change the number of grid
+#'  points for computational reasons.
+#' @param ... Parameters to pass to `createSensitivityResults` or
+#'  `createSensitivityResults_relativeMagnitudes`.
+honest_did_cluster_boot.AGGTEobj <- function(es,
+                                e          = 0,
+                                type       = c("smoothness", "relative_magnitude"),
+                                gridPoints = 500,
+                                ...) {
+
+  type <- match.arg(type)
+
+  # Make sure that user is passing in an event study
+  if (es$type != "dynamic") {
+    stop("need to pass in an event study")
+  }
+
+  # Check if used universal base period and warn otherwise
+  if (es$DIDparams$base_period != "universal") {
+    stop("Use a universal base period for honest_did")
+  }
+    
+  # Recover influence function for event-study estimates
+  es_inf_func <- as.matrix(es$inf.function$dynamic.inf.func.e)
+  
+  n <- nrow(es_inf_func)
+  K <- ncol(es_inf_func)
+  
+  # ------------------------------------------------------------
+  # Province-cluster multiplier-bootstrap covariance matrix
+  
+  boot <- did::mboot(
+    inf.func  = es_inf_func,
+    DIDparams = es$DIDparams,
+    pl        = FALSE,
+    cores     = 1,
+    return_V  = TRUE
+  )
+  
+  # Number of province clusters
+  cluster_vector <- es$DIDparams$cluster_vector
+  
+  if (is.null(cluster_vector)) {
+    stop("cluster_vector is missing from es$DIDparams.")
+  }
+  
+  G <- length(unique(cluster_vector))
+  
+  # Identify non-degenerate IF columns in the same spirit as did::mboot()
+  ndg <- (!is.na(colSums(es_inf_func))) &
+         (colSums(es_inf_func^2) >
+            sqrt(.Machine$double.eps) * 10)
+  
+  # Bootstrap covariance on the estimator scale
+  V_nd <- boot$V * G / n^2
+  
+  if (sum(ndg) != ncol(V_nd)) {
+  stop("Mismatch between non-degenerate IF columns and bootstrap covariance matrix.")
+  }
+  
+  # Reconstruct full K x K covariance matrix.
+  # The universal reference period has a zero row/column.
+  V <- matrix(
+    0,
+    nrow = K,
+    ncol = K
+  )
+  
+  V[ndg, ndg] <- V_nd
+  
+  # ------------------------------------------------------------
+
+  # Check time vector is consecutive with referencePeriod = -1
+  referencePeriod <- -1
+  consecutivePre  <- !all(diff(es$egt[es$egt <= referencePeriod]) == 1)
+  consecutivePost <- !all(diff(es$egt[es$egt >= referencePeriod]) == 1)
+  if ( consecutivePre | consecutivePost ) {
+    msg <- "honest_did expects a time vector with consecutive time periods;"
+    msg <- paste(msg, "please re-code your event study and interpret the results accordingly.", sep="\n")
+    stop(msg)
+  }
+
+  # Remove the coefficient normalized to zero
+  hasReference <- any(es$egt == referencePeriod)
+  if ( hasReference ) {
+    referencePeriodIndex <- which(es$egt == referencePeriod)
+    V    <- V[-referencePeriodIndex,-referencePeriodIndex]
+    beta <- es$att.egt[-referencePeriodIndex]
+  } else {
+    beta <- es$att.egt
+  }
+
+  nperiods <- nrow(V)
+  npre     <- sum(1*(es$egt < referencePeriod))
+  npost    <- nperiods - npre
+  if ( !hasReference & (min(c(npost, npre)) <= 0) ) {
+    if ( npost <= 0 ) {
+      msg <- "not enough post-periods"
+    } else {
+      msg <- "not enough pre-periods"
+    }
+    msg <- paste0(msg, " (check your time vector; note honest_did takes -1 as the reference period)")
+    stop(msg)
+  }
+
+  baseVec1 <- basisVector(index=(e+1),size=npost)
+  post_att <- as.numeric(t(baseVec1) %*% beta[(npre + 1):(npre + npost)])
+  
+  orig_ci  <- constructOriginalCS(betahat        = beta,
+                                  sigma          = V,
+                                  numPrePeriods  = npre,
+                                  numPostPeriods = npost,
+                                  l_vec          = baseVec1)
+
+  if (type=="relative_magnitude") {
+    robust_ci <- createSensitivityResults_relativeMagnitudes(betahat        = beta,
+                                                             sigma          = V,
+                                                             numPrePeriods  = npre,
+                                                             numPostPeriods = npost,
+                                                             l_vec          = baseVec1,
+                                                             gridPoints     = gridPoints,
+                                                             ...)
+
+  } else if (type == "smoothness") {
+    robust_ci <- createSensitivityResults(betahat        = beta,
+                                          sigma          = V,
+                                          numPrePeriods  = npre,
+                                          numPostPeriods = npost,
+                                          l_vec          = baseVec1,
+                                          ...)
+  }
+
+  return(list(robust_ci=robust_ci, orig_ci=orig_ci, 
+              point_est = post_att, type=type,
+              V = V, n_clusters  = G, n_units = n))
+}
+
+# ------------------------------------------------------------------------------
+# Province-cluster robust + Bootstrapping + Avg of post-treatment periods
+# ------------------------------------------------------------------------------
+
+#' @title honest_did_cluster_boot_avg
+#'
+#' @description a function to compute a sensitivity analysis
+#'  using the approach of Rambachan and Roth (2021)
+#'
+#' @param ... Parameters to pass to the relevant method.
+honest_did_cluster_boot_avg <- function(...) UseMethod("honest_did_cluster_boot_avg")
+
+#' @title honest_did_cluster_boot_avg.AGGTEobj
+#'
+#' @description a function to compute a sensitivity analysis
+#'  using the approach of Rambachan and Roth (2021) when
+#'  the event study is estimating using the `did` package
+#'
+#' @param es Result from aggte (object of class AGGTEobj).
+#' @param type Options are "smoothness" (which conducts a
+#'  sensitivity analysis allowing for violations of linear trends
+#'  in pre-treatment periods) or "relative_magnitude" (which
+#'  conducts a sensitivity analysis based on the relative magnitudes
+#'  of deviations from parallel trends in pre-treatment periods).
+#' @param gridPoints Number of grid points used for the underlying test
+#'  inversion. Default equals 100. User may wish to change the number of grid
+#'  points for computational reasons.
+#' @param ... Parameters to pass to `createSensitivityResults` or
+#'  `createSensitivityResults_relativeMagnitudes`.
+honest_did_cluster_boot_avg.AGGTEobj <- function(es,
+                                type       = c("smoothness", "relative_magnitude"),
+                                gridPoints = 500,
+                                ...) {
+
+  type <- match.arg(type)
+
+  # Make sure that user is passing in an event study
+  if (es$type != "dynamic") {
+    stop("need to pass in an event study")
+  }
+
+  # Check if used universal base period and warn otherwise
+  if (es$DIDparams$base_period != "universal") {
+    stop("Use a universal base period for honest_did")
+  }
+    
+  # Recover influence function for event-study estimates
+  es_inf_func <- as.matrix(es$inf.function$dynamic.inf.func.e)
+  
+  n <- nrow(es_inf_func)
+  K <- ncol(es_inf_func)
+  
+  # ------------------------------------------------------------
+  # Province-cluster multiplier-bootstrap covariance matrix
+  
+  boot <- did::mboot(
+    inf.func  = es_inf_func,
+    DIDparams = es$DIDparams,
+    pl        = FALSE,
+    cores     = 1,
+    return_V  = TRUE
+  )
+  
+  # Number of province clusters
+  cluster_vector <- es$DIDparams$cluster_vector
+  
+  if (is.null(cluster_vector)) {
+    stop("cluster_vector is missing from es$DIDparams.")
+  }
+  
+  G <- length(unique(cluster_vector))
+  
+  # Identify non-degenerate IF columns in the same spirit as did::mboot()
+  ndg <- (!is.na(colSums(es_inf_func))) &
+         (colSums(es_inf_func^2) >
+            sqrt(.Machine$double.eps) * 10)
+  
+  # Bootstrap covariance on the estimator scale
+  V_nd <- boot$V * G / n^2
+  
+  if (sum(ndg) != ncol(V_nd)) {
+  stop("Mismatch between non-degenerate IF columns and bootstrap covariance matrix.")
+  }
+  
+  # Reconstruct full K x K covariance matrix.
+  # The universal reference period has a zero row/column.
+  V <- matrix(
+    0,
+    nrow = K,
+    ncol = K
+  )
+  
+  V[ndg, ndg] <- V_nd
+  
+  # ------------------------------------------------------------
+
+  # Check time vector is consecutive with referencePeriod = -1
+  referencePeriod <- -1
+  consecutivePre  <- !all(diff(es$egt[es$egt <= referencePeriod]) == 1)
+  consecutivePost <- !all(diff(es$egt[es$egt >= referencePeriod]) == 1)
+  if ( consecutivePre | consecutivePost ) {
+    msg <- "honest_did expects a time vector with consecutive time periods;"
+    msg <- paste(msg, "please re-code your event study and interpret the results accordingly.", sep="\n")
+    stop(msg)
+  }
+
+  # Remove the coefficient normalized to zero
+  hasReference <- any(es$egt == referencePeriod)
+  if ( hasReference ) {
+    referencePeriodIndex <- which(es$egt == referencePeriod)
+    V    <- V[-referencePeriodIndex,-referencePeriodIndex]
+    beta <- es$att.egt[-referencePeriodIndex]
+  } else {
+    beta <- es$att.egt
+  }
+
+  nperiods <- nrow(V)
+  npre     <- sum(1*(es$egt < referencePeriod))
+  npost    <- nperiods - npre
+  if ( !hasReference & (min(c(npost, npre)) <= 0) ) {
+    if ( npost <= 0 ) {
+      msg <- "not enough post-periods"
+    } else {
+      msg <- "not enough pre-periods"
+    }
+    msg <- paste0(msg, " (check your time vector; note honest_did takes -1 as the reference period)")
+    stop(msg)
+  }
+
+  l_vec <- rep(1 / npost, npost)
+  post_att <- as.numeric(t(l_vec) %*% beta[(npre + 1):(npre + npost)])
+  
+  orig_ci  <- constructOriginalCS(betahat        = beta,
+                                  sigma          = V,
+                                  numPrePeriods  = npre,
+                                  numPostPeriods = npost,
+                                  l_vec          = l_vec)
+
+  if (type=="relative_magnitude") {
+    robust_ci <- createSensitivityResults_relativeMagnitudes(betahat        = beta,
+                                                             sigma          = V,
+                                                             numPrePeriods  = npre,
+                                                             numPostPeriods = npost,
+                                                             l_vec          = l_vec,
+                                                             gridPoints     = gridPoints,
+                                                             ...)
+
+  } else if (type == "smoothness") {
+    robust_ci <- createSensitivityResults(betahat        = beta,
+                                          sigma          = V,
+                                          numPrePeriods  = npre,
+                                          numPostPeriods = npost,
+                                          l_vec          = l_vec,
+                                          ...)
+  }
+
+  return(list(robust_ci=robust_ci, orig_ci=orig_ci, 
+              point_est = post_att, type=type, l_vec = l_vec,
+              V = V, n_clusters  = G, n_units = n))
+}
+
+```
+<br>
+
+# Difference-in-differences: Callaway and Sant'Anna (2021)
+<br>
+```{r csdid}
+
+# Provinces and the month of inception
+# -----------------------------------
+# VTC No intervention (never-treated control group);
+# PSL 2017/02/01; LNT 2016/08/01; ODX 2017/02/01; BKO 2017/10/01; LPG 2017/10/01;
+# HPN 2017/01/01; XYB 2017/10/01; XKG 2017/01/01; VTP 2017/10/01; BKX 2017/01/01;
+# KMN 2017/10/01; SVK 2017/09/01; SRV 2016/12/01; SEK 2017/06/01; CPS 2017/09/01;
+# ATP 2016/07/01; XSB 2016/08/01
+
+# Intervention sequence:
+# -----------------------------------
+# 1st treated (Q3/2016): 17 ATP, 03 LNT, 18 XSB
+# 2nd treated (Q4/2016): 14 SRV
+# 3rd treated (Q1/2017): 11 BKX, 07 HPN, 09 XKG, 04 ODX, 02 PSL
+# 4th treated (Q3/2017): 13 SVK, 16 CPS
+# 5th treated (Q4/2017): 05 BKO, 12 KMN, 06 LPG, 08 XYB, 10 VTP
+
+# Intervention group: Q3/2016, Q4/2016, Q1/2017, Q3/2017
+# Control group: not-yet-treated (Q4/2016, Q1/2017, Q3/2017) + last-treated (Q4/2017)
+
+data_g9 <- data %>% 
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital") %>%
+  mutate(treat = ifelse(group == max(group), 0, treat),
+         group = ifelse(group == max(group), 0, group))
+head(data_g9)
+
+# 1201 Thakhek - ipday NA
+
+# Number of health facilities (at event time = 0)
+# sumfacn_t8 <- data_g9 %>%
+#  filter(time == 8) %>%
+#  summarise(sumfacn = sum(facnum))
+# sum(sumfacn_t8$sumfacn)
+
+# sumfacn_treat <- data_g9 %>%
+#  filter(event == 0) %>%
+#  group_by(group) %>%
+#  summarise(sumfacn = sum(facnum))
+# sum(sumfacn_treat$sumfacn)
+
+# sumfacn_control <- data_g9 %>%
+#  filter(group == 0) %>%
+#  filter(time == max(time)) %>%
+#  group_by(group) %>%
+#  summarise(sumfacn = sum(facnum))
+
+# Covariates
+covariate <- ~facnum + semp + urba + litr + imps
+
+outname <- c(
+  
+  # count
+  "opo5", "opu5", "ipo5", "ipu5", "ipday", "del",
+  # "anc", "pnc",
+  # "opo5.raw", "opu5.raw", "ipo5.raw", "ipu5.raw", "ipday.raw",
+  # "del.raw", "anc.raw", "pnc.raw",
+  # "fic1",
+  
+  # rate
+  "opo5r", "opu5r", "ipo5r", "ipu5r", "iplos", "delr",
+  # "opipo5r", "opipu5r"
+  # "opo5r.nodec", "ipo5r.nodec",
+  # "opo5r.raw", "opu5r.raw", "ipo5r.raw", "ipu5r.raw", "iplos.raw", "delr.raw",
+  # zero imputation
+  # "opo5r.zero", "opu5r.zero", "ipo5r.zero", "ipu5r.zero",
+  # "iplos.zero", "delr.zero"
+  
+  # log-count
+  "lopo5", "lopu5", "lipo5", "lipu5", "lipday", "ldel"
+)
+
+for (i in 1:length(outname)) {
+
+set.seed(55555)
+
+# ------------------------------------------------------------------------------
+# Varying pre-period
+# ------------------------------------------------------------------------------
+
+sep(outname[i])
+
+# Base
+v <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+            gname = "group", control_group = "notyettreated",
+            base_period = "varying",  # reference point varies for pre-NHI period
+            est_method = "dr",  # w/o covariate -> outcome regression
+            xformla = NULL, panel = TRUE, bstrap = TRUE, cband = TRUE,
+            data = data_g9)
+glance(v)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- v", "- att")) %>% put()
+v %>% put()
+warnings()
+
+# SE clustered at provincial level
+v.cls <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                gname = "group", control_group = "notyettreated",
+                base_period = "varying",  # reference point varies for pre-NHI period
+                est_method = "dr", clustervars = "pnum",
+                xformla = NULL, panel = TRUE, bstrap = TRUE, 
+                cband = TRUE, data = data_g9)
+glance(v.cls)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- v.cls", "- att")) %>% put()
+v.cls %>% put()
+warnings()
+
+# w/ covariates, base
+vc <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+             gname = "group", control_group = "notyettreated",
+             base_period = "varying",  # varying reference point
+             est_method = "dr",
+             xformla = covariate, panel = TRUE, bstrap = TRUE, 
+             cband = TRUE, data = data_g9)
+glance(vc)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc", "- att")) %>% put()
+vc %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level, no bootstrap
+vc.cls.p.noboot <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate, panel = TRUE, bstrap = FALSE, 
+                 cband = FALSE, data = data_g9)
+glance(vc.cls.p.noboot)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.p.noboot", "- att")) %>% put()
+vc.cls.p.noboot %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level 
+vc.cls.p <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_g9)
+glance(vc.cls.p)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.p", "- att")) %>% put()
+vc.cls.p %>% put()
+warnings()
+
+# w/ covariates, SE clustered at district level 
+vc.cls.d <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "dnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_g9)
+glance(vc.cls.d)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.d", "- att")) %>% put()
+vc.cls.d %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level, last cohort
+vc.clslast <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                     gname = "group", control_group = "nevertreated",
+                     base_period = "varying",  # varying reference point
+                     est_method = "dr", clustervars = "pnum",
+                     xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                     cband = TRUE, data = data_g9)
+glance(vc.clslast)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.clslast", "- att")) %>% put()
+vc.clslast %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level + anticipation = 1
+vc.clsant1 <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                     gname = "group", control_group = "notyettreated",
+                     base_period = "varying",  # varying reference point
+                     est_method = "dr", anticipation = 1, clustervars = "pnum",
+                     xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                     cband = TRUE, data = data_g9)
+glance(vc.clsant1)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.clsant1", "- att")) %>% put()
+vc.clsant1 %>% put()
+warnings()
+
+# ------------------------------------------------------------------------------
+# Universal pre-period
+# ------------------------------------------------------------------------------
+
+# Base
+u <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+            gname = "group", control_group = "notyettreated",
+            base_period = "universal",  # reference point fixed for pre-NHI period
+            est_method = "dr",
+            xformla = NULL, panel = TRUE, bstrap = TRUE, 
+            cband = TRUE, data = data_g9)
+glance(u)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- u", "- att")) %>% put()
+u %>% put()
+warnings()
+
+# SE clustered at provincial level
+u.cls <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                gname = "group", control_group = "notyettreated",
+                base_period = "universal",  # reference point fixed for pre-NHI period
+                est_method = "dr", clustervars = "pnum",
+                xformla = NULL, panel = TRUE, bstrap = TRUE, 
+                cband = TRUE, data = data_g9)
+glance(u.cls)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- u.cls", "- att")) %>% put()
+u.cls %>% put()
+warnings()
+
+# w/ covariates, Universal pre-period
+uc <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+             gname = "group", control_group = "notyettreated",
+             base_period = "universal",  # fixed reference point
+             est_method = "dr",
+             xformla = covariate, panel = TRUE, bstrap = TRUE, 
+             cband = TRUE, data = data_g9)
+glance(uc)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc", "- att")) %>% put()
+uc %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level, no bootstrap
+uc.cls.p.noboot <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate, panel = TRUE, bstrap = FALSE, 
+                 cband = FALSE, data = data_g9)
+glance(uc.cls.p.noboot)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.p.noboot", "- att")) %>% put()
+uc.cls.p.noboot %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level
+uc.cls.p <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_g9)
+glance(uc.cls.p)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.p", "- att")) %>% put()
+uc.cls.p %>% put()
+warnings()
+
+# w/ covariates, SE clustered at district level
+uc.cls.d <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "dnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_g9)
+glance(uc.cls.d)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.d", "- att")) %>% put()
+uc.cls.d %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level, last cohort
+uc.clslast <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                     gname = "group", control_group = "nevertreated",
+                     base_period = "universal",  # fixed reference point
+                     est_method = "dr", clustervars = "pnum",
+                     xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                     cband = TRUE, data = data_g9)
+glance(uc.clslast)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.clslast", "- att")) %>% put()
+uc.clslast %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level + anticipation = 1
+uc.clsant1 <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                     gname = "group", control_group = "notyettreated",
+                     base_period = "universal",  # fixed reference point
+                     est_method = "dr", anticipation = 1, clustervars = "pnum",
+                     xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                     cband = TRUE, data = data_g9)
+glance(uc.clsant1)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.clsant1", "- att")) %>% put()
+uc.clsant1 %>% put()
+warnings()
+
+listv <- c("v", "v.cls", 
+           "vc", "vc.cls.p.noboot", "vc.cls.p", "vc.cls.d", "vc.clslast", "vc.clsant1")
+attgt_list_v <- lapply(listv, get)
+
+listu <- c("u", "u.cls", 
+           "uc", "uc.cls.p.noboot", "uc.cls.p", "uc.cls.d", "uc.clslast", "uc.clsant1")
+attgt_list_u <- lapply(listu, get)
+
+# ------------------------------------------------------------------------------
+# Tidy the results and export to Excel file
+# ------------------------------------------------------------------------------
+
+# preevent <- data_g9 %>%
+#  filter(group > 0 & event == -1) %>%  # only treated units and event time -1
+#  mutate(avgunit = mean(opo5r)) %>%  # simple average of units
+#  group_by(group) %>%  # grouping to reflect group-time ATT
+#  mutate(avggrp = mean(opo5r)) %>% ungroup() %>%  # average of units by group
+#  dplyr::select(c("group", "avgunit", "avggrp")) %>%
+#  mutate(avggrp2old = mean(avggrp)) %>%  # this gets weighted by # of groups
+#  unique  # -> this output is the same as CS weight averaging method
+
+outn <- rlang::sym(outname[i])
+
+preevent <- data_g9 %>%
+ filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+ mutate(avgunit = mean(!!outn, na.rm = TRUE)) %>%  # simple average of units
+ group_by(group) %>%  # grouping to reflect group-time ATT
+ mutate(avggrp = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average of units by group
+ dplyr::select(c("group", "avgunit", "avggrp")) %>%
+ # mutate(avgdyn = mean(avggrp)) %>%  # averaging of averages # same weighted avg output
+ unique
+
+u.group <- unique(data_g9$group) # unique group
+u.group <- sort(u.group)[-1] # remove untreated
+n.group <- sapply(u.group, function(gg) nrow(subset(data_g9, group == gg))) # number of group
+ngroup.mat <- as_tibble(cbind(u.group, n.group))
+colnames(ngroup.mat) <- c("group", "n.group")
+
+preevent <- preevent %>%
+ left_join(ngroup.mat, by = "group") %>%
+ mutate(weight = n.group / sum(n.group),
+        avgdyn = sum(avggrp * weight)) # weighted avg
+  
+attgt_tidy_v <- list()
+for (j in 1:length(listv)) {
+ attgt_tidy_v[[j]] <- tidy(attgt_list_v[[j]])
+ attgt_tidy_v[[j]]$ptapval <- c(attgt_list_v[[j]]$Wpval)
+ attgt_tidy_v[[j]]$name <- listv[j]
+ attgt_tidy_v[[j]] <- left_join(attgt_tidy_v[[j]], preevent, by = c("group"))
+ attgt_tidy_v[[j]]$change <- attgt_tidy_v[[j]]$estimate / attgt_tidy_v[[j]]$avggrp
+ # baseline utilization is t = -1. Not correct for anticipation effect results
+}
+
+attgt_tidy_v_frame <- bind_rows(attgt_tidy_v)
+attgt_tidy_v_frame$pretrendtype <- "varying"
+
+attgt_tidy_u <- list()
+for (j in 1:length(listu)) {
+ attgt_tidy_u[[j]] <- tidy(attgt_list_u[[j]])
+ attgt_tidy_u[[j]]$ptapval <- c(attgt_list_u[[j]]$Wpval)
+ attgt_tidy_u[[j]]$name <- listu[j]
+ attgt_tidy_u[[j]] <- left_join(attgt_tidy_u[[j]], preevent, by = c("group"))
+ attgt_tidy_u[[j]]$change <- attgt_tidy_u[[j]]$estimate / attgt_tidy_u[[j]]$avggrp
+ # baseline utilization is t = -1. Not correct for anticipation effect results
+}
+
+attgt_tidy_u_frame <- bind_rows(attgt_tidy_u)
+attgt_tidy_u_frame$pretrendtype <- "fixed"
+
+attgt_tidy_frame <- rbind(attgt_tidy_v_frame, attgt_tidy_u_frame)
+attgt_tidy_frame$outcome <- outname[i]
+
+write_xlsx(attgt_tidy_frame,
+           paste0(outpath, outname[i], "_attgt", ".xlsx"))
+
+# ------------------------------------------------------------------------------
+# Aggregate the gt-ATT's by desired dimension
+# ------------------------------------------------------------------------------
+
+# Varying period
+
+sep("Varying period, Simple")
+
+sim_v <- list()  # single treatment effect
+aggte_sim_v <- list()
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- sim")) %>% put()
+ sim_v[[k]] <- aggte(attgt_list_v[[k]], type = "simple", na.rm = TRUE) %>% put()
+ print(sim_v[[k]])
+ # warnings()
+ aggte_sim_v[[k]] <- tidy(sim_v[[k]])
+ aggte_sim_v[[k]]$name <- listv[k]
+}
+
+aggte_sim_v_frame <- bind_rows(aggte_sim_v)
+aggte_sim_v_frame <- aggte_sim_v_frame %>%
+ mutate(pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Group")
+
+grp_v <- list()  # group specific treatment effect
+aggte_grp_v <- list()
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- grp")) %>% put()
+ grp_v[[k]] <- aggte(attgt_list_v[[k]], type = "group", na.rm = TRUE) %>% put()
+ print(grp_v[[k]])
+ # warnings()
+ aggte_grp_v[[k]] <- tidy(grp_v[[k]])
+ aggte_grp_v[[k]]$name <- listv[k]
+}
+
+aggte_grp_v_frame <- bind_rows(aggte_grp_v)
+preevent$group  <- as.character(preevent$group)
+
+aggte_grp_v_frame <- aggte_grp_v_frame %>%
+ left_join(preevent, by = c("group")) %>%
+ mutate(change = estimate / avggrp,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Dynamic")
+
+# No event time balancing
+dyn_v <- list() # dynamic treatment effect (event study)
+aggte_dyn_v <- list()
+
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- dyn")) %>% put()
+ dyn_v[[k]] <- aggte(attgt_list_v[[k]], type = "dynamic", 
+                     balance_e = NULL, na.rm = TRUE) %>% put()
+ print(dyn_v[[k]])
+ # warnings()
+  
+ dyn_frame <- tidy(dyn_v[[k]]) %>% 
+   mutate(overall.att = dyn_v[[k]]$overall.att,
+          overall.se = dyn_v[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listv[k])      
+ aggte_dyn_v[[k]] <- dyn_frame
+}
+
+aggte_dyn_v_frame <- bind_rows(aggte_dyn_v)
+aggte_dyn_v_frame <- aggte_dyn_v_frame %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Dynamic, Balanced")
+
+# Event time balancing: drop groups not exposed to at least 3 quarters (e=0-2)
+dyn_v_b <- list() # dynamic treatment effect (event study)
+aggte_dyn_v_b <- list()
+
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- dyn_b")) %>% put()
+ dyn_v_b[[k]] <- aggte(attgt_list_v[[k]], type = "dynamic", 
+                      balance_e = 2, na.rm = TRUE) %>% put()
+ print(dyn_v_b[[k]])
+ # warnings()
+ 
+ dyn_frame_b <- tidy(dyn_v_b[[k]]) %>%
+  mutate(overall.att = dyn_v_b[[k]]$overall.att,
+         overall.se = dyn_v_b[[k]]$overall.se,
+         overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+         overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+         group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+         name = listv[k])
+ aggte_dyn_v_b[[k]] <- dyn_frame_b
+}
+
+aggte_dyn_v_frame_b <- bind_rows(aggte_dyn_v_b)
+aggte_dyn_v_frame_b <- aggte_dyn_v_frame_b %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+# Universal, fixed period
+
+sep("Universal (fixed) period, Simple")
+
+sim_u <- list() # single treatment effect
+aggte_sim_u <- list()
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- sim")) %>% put()
+ sim_u[[k]] <- aggte(attgt_list_u[[k]], type = "simple", na.rm = TRUE) %>% put()
+ print(sim_u[[k]])
+ # warnings()
+ aggte_sim_u[[k]] <- tidy(sim_u[[k]])
+ aggte_sim_u[[k]]$name <- listu[k]
+}
+
+aggte_sim_u_frame <- bind_rows(aggte_sim_u)
+aggte_sim_u_frame <- aggte_sim_u_frame %>%
+ mutate(pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Group")
+
+grp_u <- list() # group specific treatment effect
+aggte_grp_u <- list()
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- grp")) %>% put()
+ grp_u[[k]] <- aggte(attgt_list_u[[k]], type = "group", na.rm = TRUE) %>% put()
+ print(grp_u[[k]])
+ # warnings()
+ aggte_grp_u[[k]] <- tidy(grp_u[[k]])
+ aggte_grp_u[[k]]$name <- listu[k]
+}
+
+aggte_grp_u_frame <- bind_rows(aggte_grp_u)
+preevent$group  <- as.character(preevent$group)
+aggte_grp_u_frame <- aggte_grp_u_frame %>%
+ left_join(preevent, by = c("group")) %>%
+ mutate(change = estimate / avggrp,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Dynamic")
+
+# No event time balancing
+dyn_u <- list() # dynamic treatment effect (event study)
+aggte_dyn_u <- list()
+
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- dyn")) %>% put()
+ dyn_u[[k]] <- aggte(attgt_list_u[[k]], type = "dynamic", 
+                     balance_e = NULL, na.rm = TRUE) %>% put()
+ print(dyn_u[[k]])
+ # warnings()
+
+ dyn_frame <- tidy(dyn_u[[k]]) %>%
+   mutate(overall.att = dyn_u[[k]]$overall.att,
+          overall.se = dyn_u[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listu[k])
+ aggte_dyn_u[[k]] <- dyn_frame
+}
+
+aggte_dyn_u_frame <- bind_rows(aggte_dyn_u)
+aggte_dyn_u_frame <- aggte_dyn_u_frame %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Dynamic, Balanced")
+
+# Event time balancing: drop groups not exposed to at least 3 quarters (e=0-2)
+dyn_u_b <- list() # dynamic treatment effect (event study)
+aggte_dyn_u_b <- list()
+
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- dyn_b")) %>% put()
+ dyn_u_b[[k]] <- aggte(attgt_list_u[[k]], type = "dynamic", 
+                       balance_e = 2, na.rm = TRUE) %>% put()
+ print(dyn_u_b[[k]])
+ # warnings()
+  
+ dyn_frame_b <- tidy(dyn_u_b[[k]]) %>%
+   mutate(overall.att = dyn_u_b[[k]]$overall.att,
+          overall.se = dyn_u_b[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listu[k])
+ aggte_dyn_u_b[[k]] <- dyn_frame_b
+}
+
+aggte_dyn_u_frame_b <- bind_rows(aggte_dyn_u_b)
+aggte_dyn_u_frame_b <- aggte_dyn_u_frame_b %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+aggte_sim_frame <- rbind(aggte_sim_v_frame, aggte_sim_u_frame)
+aggte_grp_frame <- rbind(aggte_grp_v_frame, aggte_grp_u_frame)
+aggte_dyn_frame <- rbind(aggte_dyn_v_frame, aggte_dyn_u_frame)
+aggte_dyn_frame_b <- rbind(aggte_dyn_v_frame_b, aggte_dyn_u_frame_b)
+
+write_xlsx(aggte_sim_frame,
+           paste0(outpath, outname[i], "_aggte_sim", ".xlsx"))
+
+write_xlsx(aggte_grp_frame,
+           paste0(outpath, outname[i], "_aggte_grp", ".xlsx"))
+
+write_xlsx(aggte_dyn_frame,
+           paste0(outpath, outname[i], "_aggte_dyn", ".xlsx"))
+
+write_xlsx(aggte_dyn_frame_b,
+           paste0(outpath, outname[i], "_aggte_dyn_b", ".xlsx"))
+
+
+# ------------------------------------------------------------------------------
+# Honest DID sensitivity analysis
+# ------------------------------------------------------------------------------
+# Only possible for universal, fixed period DID results
+
+# In case of 
+# lazy-load database '/Library/Frameworks/R.framework/Versions/4.4-arm64/Resources/library/HonestDiD/R/HonestDiD.rdb' is corrupt -> restart the R session, and re-run.
+# .rs.restartR()
+
+didsen <- TRUE # FALSE = skip the code / TRUE = run the code
+outsen <- c("opo5r", "opu5r", "ipo5r") # run for these outcomes only
+
+if(didsen == TRUE && outname[i] %in% outsen) { 
+
+sm_u_list <- list()
+rm_u_list <- list()
+
+sm_e0_u_list <- list()
+rm_e0_u_list <- list()
+
+honest_specs <- c("uc.cls.p") #, "uc.cls.d")
+
+for (k in which(listu %in% honest_specs)) {
+ 
+  rm_grid_ub <- c(
+  opo5r = 200,
+  opu5r = 600,
+  ipo5r = 2000)
+  
+ # --------------------------------------------------------------------------
+ # Average post-treatment effects
+ # --------------------------------------------------------------------------
+ 
+ set.seed(55555)
+ sm <- honest_did_cluster_boot_avg(es = dyn_u[[k]], type = "smoothness",
+                                   Mvec = seq(0, 20, by = 2))
+ sm_rbci <- as.data.frame(sm$robust_ci)
+ sm_orgci <- as.data.frame(sm$orig_ci)
+ 
+ colnames(sm_orgci) <- c("lb", "ub", "method", "Delta")
+ sm_orgci$M <- NA
+ 
+ sm_u <- bind_rows(sm_rbci, sm_orgci) %>%
+   setNames(c("lb", "ub", "method", "Delta", "M")) %>%
+   mutate(xaxis = "M",
+          type = sm$type,
+          estimand = "avg",
+          name = listu[k],
+          outcome = outname[i],
+          point_est = sm$point_est)
+ sm_u_list[[k]] <- sm_u
+ 
+ set.seed(55555)
+ rm <- honest_did_cluster_boot_avg(
+   es = dyn_u[[k]], type = "relative_magnitude",
+   Mbarvec = seq(0, 1.5, by = 0.1),
+   grid.ub = unname(rm_grid_ub[outname[i]]))
+ rm$robust_ci <- rm$robust_ci[-1, ]  # Drop 0 as it is not really allowed.
+ rm_rbci <- as.data.frame(rm$robust_ci)
+ rm_orgci <- as.data.frame(rm$orig_ci)
+ 
+ colnames(rm_orgci) <- c("lb", "ub", "method", "Delta")
+ rm_orgci$Mbar <- NA
+ 
+ rm_u <- bind_rows(rm_rbci, rm_orgci) %>%
+   setNames(c("lb", "ub", "method", "Delta", "M")) %>%
+   mutate(xaxis = "Mbar",
+          type = rm$type,
+          estimand = "avg",
+          name = listu[k],
+          outcome = outname[i],
+          point_est = rm$point_est)
+ rm_u_list[[k]] <- rm_u
+ 
+ 
+ # --------------------------------------------------------------------------
+ # Treatment effect at e = 0
+ # --------------------------------------------------------------------------
+ 
+ set.seed(55555)
+ sm_e0 <- honest_did_cluster_boot(
+   es = dyn_u[[k]], e = 0, 
+   type = "smoothness",
+   Mvec = seq(0, 20, by = 2))
+ sm_e0_rbci <- as.data.frame(sm_e0$robust_ci)
+ sm_e0_orgci <- as.data.frame(sm_e0$orig_ci)
+ 
+ colnames(sm_e0_orgci) <- c("lb", "ub", "method", "Delta")
+ sm_e0_orgci$M <- NA
+ 
+ sm_e0_u <- bind_rows(sm_e0_rbci, sm_e0_orgci) %>%
+   setNames(c("lb", "ub", "method", "Delta", "M")) %>%
+   mutate(xaxis = "M",
+          type = sm_e0$type,
+          estimand = "e0",
+          name = listu[k],
+          outcome = outname[i],
+          point_est = sm_e0$point_est)
+ sm_e0_u_list[[k]] <- sm_e0_u
+ 
+ set.seed(55555)
+ rm_e0 <- honest_did_cluster_boot(
+   es = dyn_u[[k]], e = 0, 
+   type = "relative_magnitude",
+   Mbarvec = seq(0, 1.5, by = 0.1),
+   grid.ub = unname(rm_grid_ub[outname[i]]))
+ rm_e0$robust_ci <- rm_e0$robust_ci[-1, ]  # Drop 0 as it is not really allowed.
+ rm_e0_rbci <- as.data.frame(rm_e0$robust_ci)
+ rm_e0_orgci <- as.data.frame(rm_e0$orig_ci)
+ 
+ colnames(rm_e0_orgci) <- c("lb", "ub", "method", "Delta")
+ rm_e0_orgci$Mbar <- NA
+ 
+ rm_e0_u <- bind_rows(rm_e0_rbci, rm_e0_orgci) %>%
+   setNames(c("lb", "ub", "method", "Delta", "M")) %>%
+   mutate(xaxis = "Mbar",
+          type = rm_e0$type,
+          estimand = "e0",
+          name = listu[k],
+          outcome = outname[i],
+          point_est = rm_e0$point_est)
+ rm_e0_u_list[[k]] <- rm_e0_u
+}
+
+sm_u_frame <- bind_rows(sm_u_list)
+rm_u_frame <- bind_rows(rm_u_list)
+
+sm_e0_u_frame <- bind_rows(sm_e0_u_list)
+rm_e0_u_frame <- bind_rows(rm_e0_u_list)
+
+didsensitivity <- rbind(
+  sm_u_frame,
+  rm_u_frame,
+  sm_e0_u_frame,
+  rm_e0_u_frame
+)
+
+write_xlsx(didsensitivity,
+           paste0(outpath,outname[i], "_honestdid", ".xlsx"))
+}}
+
+```
+<br>
+
+# B6. Placebo treatment timing
+<br>
+```{r placebo}
+
+# Create directories
+if(!dir.exists("./output")) {dir.create("./output")}
+if(!dir.exists("./output/q_disl")) {dir.create("./output/q_disl")}
+if(!dir.exists("./output/q_disl/placebo")) {dir.create("./output/q_disl/placebo")}
+outpath <- c("./output/q_disl/placebo/")
+
+# Intervention group: Q3/2016, Q4/2016, Q1/2017, Q3/2017
+# Control group: not-yet-treated (Q4/2016, Q1/2017, Q3/2017) + last-treated (Q4/2017)
+
+data_g9 <- data %>% 
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital") %>%
+  mutate(group = ifelse(group == max(group), 0, group)) %>%
+  mutate(group_org = group,
+         event_org = event)
+head(data_g9)
+
+data_g9_no5 <- data %>% 
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital") %>%
+  mutate(group = ifelse(group == max(group), 0, group)) %>%
+  mutate(group_org = group,
+         event_org = event) %>%
+  filter(group_org != 5)
+head(data_g9)
+
+data_g9_1_all <- data_g9 %>%
+  mutate(
+    group = case_when(
+      group_org == 4 ~ group_org - 1,  # 1 lead
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 1,  # 1 leads
+      group_org == 8 ~ group_org - 1,  # 1 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 4, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_1_late <- data_g9 %>%
+  mutate(
+    group = case_when(
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 1,  # 1 leads
+      group_org == 8 ~ group_org - 1,  # 1 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_1_late_no4 <- data_g9 %>%
+  filter(group_org != 4) %>%
+  mutate(
+    group = case_when(
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 1,  # 1 leads
+      group_org == 8 ~ group_org - 1,  # 1 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_2_all <- data_g9 %>%
+  mutate(
+    group = case_when(
+      group_org == 4 ~ group_org - 2,  # 2 lead
+      group_org == 5 ~ group_org - 2,  # 2 lead
+      group_org == 6 ~ group_org - 2,  # 2 leads
+      group_org == 8 ~ group_org - 2,  # 2 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 4, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_2_late <- data_g9 %>%
+  mutate(
+    group = case_when(
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 2,  # 2 leads
+      group_org == 8 ~ group_org - 2,  # 2 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_2_late_no4 <- data_g9 %>%
+  filter(group_org != 4) %>%
+  mutate(
+    group = case_when(
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 2,  # 2 leads
+      group_org == 8 ~ group_org - 2,  # 2 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_3 <- data_g9 %>%
+  mutate(
+    group = case_when(
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 2,  # 2 leads
+      group_org == 8 ~ group_org - 3,  # 3 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g9_3_late_no4 <- data_g9 %>%
+  filter(group_org != 4) %>%
+  mutate(
+    group = case_when(
+      group_org == 5 ~ group_org - 1,  # 1 lead
+      group_org == 6 ~ group_org - 2,  # 2 leads
+      group_org == 8 ~ group_org - 3,  # 3 leads
+      TRUE ~ group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g5_1 <- data_g9 %>%
+  filter(group_org != 4) %>%
+  mutate(
+    group = ifelse(group_org == 5, group_org - 1, group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g6_1 <- data_g9 %>%
+  filter(!group_org %in% c(4,5)) %>%
+  mutate(
+    group = ifelse(group_org == 6, group_org - 1, group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g6_2 <- data_g9 %>%
+  filter(!group_org %in% c(4,5)) %>%
+  mutate(
+    group = ifelse(group_org == 6, group_org - 2, group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g8_1 <- data_g9 %>%
+  filter(!group_org %in% c(4,5,6)) %>%
+  mutate(
+    group = ifelse(group_org == 8, group_org - 1, group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g8_2 <- data_g9 %>%
+  filter(!group_org %in% c(4,5,6)) %>%
+  mutate(
+    group = ifelse(group_org == 8, group_org - 2, group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+data_g8_3 <- data_g9 %>%
+  filter(!group_org %in% c(4,5,6)) %>%
+  mutate(
+    group = ifelse(group_org == 8, group_org - 3, group_org),
+    event = ifelse(group_org >= 5, time - group, event_org),
+    treat = ifelse(time >= group & group > 0, 1, 0))
+
+
+data_list <- list(
+  g9_no5 = data_g9_no5,
+  g9_1_all = data_g9_1_all,
+  g9_1_late = data_g9_1_late,
+  g9_1_late_no4 = data_g9_1_late_no4,
+  g9_2_all = data_g9_2_all,
+  g9_2_late = data_g9_2_late,
+  g9_2_late_no4 = data_g9_2_late_no4,
+  g9_3 = data_g9_3,
+  g9_3_late_no4 = data_g9_3_late_no4,
+  g5_1 = data_g5_1,
+  g6_1 = data_g6_1,
+  g6_2 = data_g6_2,
+  g8_1 = data_g8_1,
+  g8_2 = data_g8_2,
+  g8_3 = data_g8_3)
+
+# 1201 Thakhek - ipday NA
+
+# Covariates
+covariate <- ~facnum + semp + urba + litr + imps
+
+outname <- c(
+  # rate
+  "opo5r", "opu5r", "ipo5r", "ipu5r", "iplos", "delr")
+
+for (name in names(data_list)) {
+
+for (i in 1:length(outname)) {
+
+set.seed(55555)
+
+# ------------------------------------------------------------------------------
+# Varying pre-period
+# ------------------------------------------------------------------------------
+
+sep(outname[i])
+
+# w/ covariates, SE clustered at provincial level 
+vc.cls.p <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_list[[name]])
+glance(vc.cls.p)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.p", "- att")) %>% put()
+vc.cls.p %>% put()
+warnings()
+
+# w/ covariates, SE clustered at district level 
+vc.cls.d <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "varying",  # varying reference point
+                 est_method = "dr", clustervars = "dnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_list[[name]])
+glance(vc.cls.d)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.cls.d", "- att")) %>% put()
+vc.cls.d %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level, last cohort
+vc.clslast <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                     gname = "group", control_group = "nevertreated",
+                     base_period = "varying",  # varying reference point
+                     est_method = "dr", clustervars = "pnum",
+                     xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                     cband = TRUE, data = data_list[[name]])
+glance(vc.clslast)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- vc.clslast", "- att")) %>% put()
+vc.clslast %>% put()
+warnings()
+
+# ------------------------------------------------------------------------------
+# Universal pre-period
+# ------------------------------------------------------------------------------
+
+# w/ covariates, SE clustered at provincial level
+uc.cls.p <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "pnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_list[[name]])
+glance(uc.cls.p)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.p", "- att")) %>% put()
+uc.cls.p %>% put()
+warnings()
+
+# w/ covariates, SE clustered at district level
+uc.cls.d <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                 gname = "group", control_group = "notyettreated",
+                 base_period = "universal",  # fixed reference point
+                 est_method = "dr", clustervars = "dnum",
+                 xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                 cband = TRUE, data = data_list[[name]])
+glance(uc.cls.d)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.cls.d", "- att")) %>% put()
+uc.cls.d %>% put()
+warnings()
+
+# w/ covariates, SE clustered at provincial level, last cohort
+uc.clslast <- att_gt(yname = outname[i], tname = "time", idname = "dnum",
+                     gname = "group", control_group = "nevertreated",
+                     base_period = "universal",  # fixed reference point
+                     est_method = "dr", clustervars = "pnum",
+                     xformla = covariate, panel = TRUE, bstrap = TRUE, 
+                     cband = TRUE, data = data_list[[name]])
+glance(uc.clslast)
+print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+print(paste(outname[i], "- uc.clslast", "- att")) %>% put()
+uc.clslast %>% put()
+warnings()
+
+listv <- c("vc.cls.p", "vc.cls.d", "vc.clslast")
+attgt_list_v <- lapply(listv, get)
+
+listu <- c("uc.cls.p", "uc.cls.d", "uc.clslast")
+attgt_list_u <- lapply(listu, get)
+
+# ------------------------------------------------------------------------------
+# Tidy the results and export to Excel file
+# ------------------------------------------------------------------------------
+
+# preevent <- data_g9 %>%
+#  filter(group > 0 & event == -1) %>%  # only treated units and event time -1
+#  mutate(avgunit = mean(opo5r)) %>%  # simple average of units
+#  group_by(group) %>%  # grouping to reflect group-time ATT
+#  mutate(avggrp = mean(opo5r)) %>% ungroup() %>%  # average of units by group
+#  dplyr::select(c("group", "avgunit", "avggrp")) %>%
+#  mutate(avggrp2old = mean(avggrp)) %>%  # this gets weighted by # of groups
+#  unique  # -> this output is the same as CS weight averaging method
+
+outn <- rlang::sym(outname[i])
+
+preevent <- data_list[[name]] %>%
+ filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+ mutate(avgunit = mean(!!outn, na.rm = TRUE)) %>%  # simple average of units
+ group_by(group) %>%  # grouping to reflect group-time ATT
+ mutate(avggrp = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average of units by group
+ dplyr::select(c("group", "avgunit", "avggrp")) %>%
+ # mutate(avgdyn = mean(avggrp)) %>%  # averaging of averages # same weighted avg output
+ unique
+
+u.group <- unique(data_list[[name]]$group) # unique group
+u.group <- sort(u.group)[-1] # remove untreated
+n.group <- sapply(u.group, function(gg) nrow(subset(data_list[[name]], group == gg))) # number of group
+ngroup.mat <- as_tibble(cbind(u.group, n.group))
+colnames(ngroup.mat) <- c("group", "n.group")
+
+preevent <- preevent %>%
+ left_join(ngroup.mat, by = "group") %>%
+ mutate(weight = n.group / sum(n.group),
+        avgdyn = sum(avggrp * weight)) # weighted avg
+  
+attgt_tidy_v <- list()
+for (j in 1:length(listv)) {
+ attgt_tidy_v[[j]] <- tidy(attgt_list_v[[j]])
+ attgt_tidy_v[[j]]$ptapval <- c(attgt_list_v[[j]]$Wpval)
+ attgt_tidy_v[[j]]$name <- listv[j]
+ attgt_tidy_v[[j]] <- left_join(attgt_tidy_v[[j]], preevent, by = c("group"))
+ attgt_tidy_v[[j]]$change <- attgt_tidy_v[[j]]$estimate / attgt_tidy_v[[j]]$avggrp
+ # baseline utilization is t = -1. Not correct for anticipation effect results
+}
+
+attgt_tidy_v_frame <- bind_rows(attgt_tidy_v)
+attgt_tidy_v_frame$pretrendtype <- "varying"
+
+attgt_tidy_u <- list()
+for (j in 1:length(listu)) {
+ attgt_tidy_u[[j]] <- tidy(attgt_list_u[[j]])
+ attgt_tidy_u[[j]]$ptapval <- c(attgt_list_u[[j]]$Wpval)
+ attgt_tidy_u[[j]]$name <- listu[j]
+ attgt_tidy_u[[j]] <- left_join(attgt_tidy_u[[j]], preevent, by = c("group"))
+ attgt_tidy_u[[j]]$change <- attgt_tidy_u[[j]]$estimate / attgt_tidy_u[[j]]$avggrp
+ # baseline utilization is t = -1. Not correct for anticipation effect results
+}
+
+attgt_tidy_u_frame <- bind_rows(attgt_tidy_u)
+attgt_tidy_u_frame$pretrendtype <- "fixed"
+
+attgt_tidy_frame <- rbind(attgt_tidy_v_frame, attgt_tidy_u_frame)
+attgt_tidy_frame$outcome <- outname[i]
+
+write_xlsx(attgt_tidy_frame,
+           paste0(outpath, outname[i], "_attgt_", name, ".xlsx"))
+
+# ------------------------------------------------------------------------------
+# Aggregate the gt-ATT's by desired dimension
+# ------------------------------------------------------------------------------
+
+# Varying period
+
+sep("Varying period, Simple")
+
+sim_v <- list()  # single treatment effect
+aggte_sim_v <- list()
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- sim")) %>% put()
+ sim_v[[k]] <- aggte(attgt_list_v[[k]], type = "simple", na.rm = TRUE) %>% put()
+ print(sim_v[[k]])
+ # warnings()
+ aggte_sim_v[[k]] <- tidy(sim_v[[k]])
+ aggte_sim_v[[k]]$name <- listv[k]
+}
+
+aggte_sim_v_frame <- bind_rows(aggte_sim_v)
+aggte_sim_v_frame <- aggte_sim_v_frame %>%
+ mutate(pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Group")
+
+grp_v <- list()  # group specific treatment effect
+aggte_grp_v <- list()
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- grp")) %>% put()
+ grp_v[[k]] <- aggte(attgt_list_v[[k]], type = "group", na.rm = TRUE) %>% put()
+ print(grp_v[[k]])
+ # warnings()
+ aggte_grp_v[[k]] <- tidy(grp_v[[k]])
+ aggte_grp_v[[k]]$name <- listv[k]
+}
+
+aggte_grp_v_frame <- bind_rows(aggte_grp_v)
+preevent$group  <- as.character(preevent$group)
+
+aggte_grp_v_frame <- aggte_grp_v_frame %>%
+ left_join(preevent, by = c("group")) %>%
+ mutate(change = estimate / avggrp,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+sep("Varying period, Dynamic")
+
+# No event time balancing
+dyn_v <- list() # dynamic treatment effect (event study)
+aggte_dyn_v <- list()
+
+for (k in 1:length(attgt_list_v)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listv[k], "- dyn")) %>% put()
+ dyn_v[[k]] <- aggte(attgt_list_v[[k]], type = "dynamic", 
+                     balance_e = NULL, na.rm = TRUE) %>% put()
+ print(dyn_v[[k]])
+ # warnings()
+  
+ dyn_frame <- tidy(dyn_v[[k]]) %>% 
+   mutate(overall.att = dyn_v[[k]]$overall.att,
+          overall.se = dyn_v[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listv[k])      
+ aggte_dyn_v[[k]] <- dyn_frame
+}
+
+aggte_dyn_v_frame <- bind_rows(aggte_dyn_v)
+aggte_dyn_v_frame <- aggte_dyn_v_frame %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "varying",
+        outcome = outname[i])
+
+
+# Universal, fixed period
+
+sep("Universal (fixed) period, Simple")
+
+sim_u <- list() # single treatment effect
+aggte_sim_u <- list()
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- sim")) %>% put()
+ sim_u[[k]] <- aggte(attgt_list_u[[k]], type = "simple", na.rm = TRUE) %>% put()
+ print(sim_u[[k]])
+ # warnings()
+ aggte_sim_u[[k]] <- tidy(sim_u[[k]])
+ aggte_sim_u[[k]]$name <- listu[k]
+}
+
+aggte_sim_u_frame <- bind_rows(aggte_sim_u)
+aggte_sim_u_frame <- aggte_sim_u_frame %>%
+ mutate(pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Group")
+
+grp_u <- list() # group specific treatment effect
+aggte_grp_u <- list()
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- grp")) %>% put()
+ grp_u[[k]] <- aggte(attgt_list_u[[k]], type = "group", na.rm = TRUE) %>% put()
+ print(grp_u[[k]])
+ # warnings()
+ aggte_grp_u[[k]] <- tidy(grp_u[[k]])
+ aggte_grp_u[[k]]$name <- listu[k]
+}
+
+aggte_grp_u_frame <- bind_rows(aggte_grp_u)
+preevent$group  <- as.character(preevent$group)
+aggte_grp_u_frame <- aggte_grp_u_frame %>%
+ left_join(preevent, by = c("group")) %>%
+ mutate(change = estimate / avggrp,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+sep("Universal (fixed) period, Dynamic")
+
+# No event time balancing
+dyn_u <- list() # dynamic treatment effect (event study)
+aggte_dyn_u <- list()
+
+for (k in 1:length(attgt_list_u)) {
+ print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~") %>% put()
+ print(paste(outname[i], "-", listu[k], "- dyn")) %>% put()
+ dyn_u[[k]] <- aggte(attgt_list_u[[k]], type = "dynamic", 
+                     balance_e = NULL, na.rm = TRUE) %>% put()
+ print(dyn_u[[k]])
+ # warnings()
+
+ dyn_frame <- tidy(dyn_u[[k]]) %>%
+   mutate(overall.att = dyn_u[[k]]$overall.att,
+          overall.se = dyn_u[[k]]$overall.se,
+          overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+          overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+          group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"),
+          name = listu[k])
+ aggte_dyn_u[[k]] <- dyn_frame
+}
+
+aggte_dyn_u_frame <- bind_rows(aggte_dyn_u)
+aggte_dyn_u_frame <- aggte_dyn_u_frame %>%
+ mutate(avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        overall.change = overall.att / avgdyn,
+        pretrendtype = "fixed",
+        outcome = outname[i])
+
+
+aggte_sim_frame <- rbind(aggte_sim_v_frame, aggte_sim_u_frame)
+aggte_grp_frame <- rbind(aggte_grp_v_frame, aggte_grp_u_frame)
+aggte_dyn_frame <- rbind(aggte_dyn_v_frame, aggte_dyn_u_frame)
+
+write_xlsx(aggte_sim_frame,
+           paste0(outpath, outname[i], "_aggte_sim_", name,".xlsx"))
+
+write_xlsx(aggte_grp_frame,
+           paste0(outpath, outname[i], "_aggte_grp_", name, ".xlsx"))
+
+write_xlsx(aggte_dyn_frame,
+           paste0(outpath, outname[i], "_aggte_dyn_", name,".xlsx"))
+
+}}
+
+```
+<br>
+
+# A3. Subgroup analyses: district-level poverty status
+<br>
+```{r poverty}
+
+# ------------------------------------------------------------------------------
+# Poverty characteristics
+# ------------------------------------------------------------------------------
+
+table1_pov <- data %>%
+  filter(quarter == 2015.4) %>%                     # filter unique quarter
+  filter(!group == 0) %>%                           # remove never treated
+  dplyr::select(group, facnum, imps, litr, semp, urba, pov_med) %>%
+  mutate(across(imps:urba, ~.x * 100)) %>%
+  mutate(pov_med_label = ifelse(pov_med == 1, "High-poverty", "Low-poverty")) %>%
+  dplyr::select(-pov_med) %>%
+  tbl_strata(strata = pov_med_label,
+             ~tbl_summary(.x,
+                          by = group,
+                          statistic = list(
+                            facnum ~ "{sum}",
+                            facnum ~ "{mean} ({sd})",
+                            semp ~ "{mean} ({sd})",
+                            urba ~ "{mean} ({sd})",
+                            imps ~ "{mean} ({sd})",
+                            litr ~ "{mean} ({sd})"),
+                          label = list(
+                            facnum ~ "Total facilities, No.",
+                            facnum ~ "Mean facilities, No.",
+                            semp ~ "Self-employed population, %",
+                            urba ~ "Urban population, %",
+                            imps ~ "Improved sanitation, % ",
+                            litr ~ "Literacy among aged 15-64, %"),
+                          digits = list(all_continuous() ~ 1)) %>%
+               modify_header(all_stat_cols() ~ "**{level}**<br>(n={n})") %>%
+               remove_footnote_header(columns = everything()))  # remove footnote 1
+# modify_column_alignment(columns = everything(), align = "center")
+
+table1_pov
+show_header_names(table1_pov) %>% put()
+
+# ------------------------------------------------------------------------------
+# Group-Time DiD (Callaway and Sant’Anna 2021) - no covariate
+# ------------------------------------------------------------------------------
+
+data_pov <- data %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+         province != "01 Vientiane Capital") %>%
+  mutate(group = ifelse(group == max(group), 0, group)) %>%
+  mutate(event2 = ifelse(group == 0, -1000, event)) %>%
+  mutate(group2 = ifelse(group == 0, 0, 1)) # group dummy: 0, 1
+head(data_pov)
+
+outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+
+cs_dyn_list <- list()
+
+groups <- list(
+  overall = data_pov,
+  poor = subset(data_pov, pov_med == 1), # high-poverty
+  rich = subset(data_pov, pov_med == 0)  # low-poverty
+)
+
+for (g in names(groups)) {
+  
+  dat <- groups[[g]]
+  
+  for (i in 1:length(outname)) {
+    
+    outn <- rlang::sym(outname[i])
+    
+    preevent <- dat %>%
+      filter(group > 0 & event == -1) %>%
+      mutate(avgunit = mean(!!outn, na.rm = TRUE)) %>%
+      group_by(group) %>%
+      mutate(avggrp = mean(!!outn, na.rm = TRUE)) %>%
+      ungroup() %>%
+      dplyr::select(c("group", "avgunit", "avggrp")) %>%
+      unique()
+    
+    u.group <- unique(dat$group)
+    u.group <- sort(u.group)[-1]
+    
+    n.group <- sapply(u.group, function(gg) nrow(subset(dat, group == gg)))
+    ngroup.mat <- as_tibble(cbind(u.group, n.group))
+    colnames(ngroup.mat) <- c("group", "n.group")
+    
+    preevent <- preevent %>%
+      left_join(ngroup.mat, by = "group") %>%
+      mutate(
+        weight = n.group / sum(n.group),
+        avgdyn = sum(avggrp * weight))
+    
+    set.seed(55555)
+    
+    cs_g9_nyt <- att_gt(
+      yname = outname[i], tname = "time", idname = "dnum", gname = "group",
+      control_group = "notyettreated", base_period = "universal", 
+      est_method = "dr", clustervars = "pnum",
+      #      xformla = covariate,
+      panel = TRUE, bstrap = TRUE, cband = TRUE, data = dat)
+    
+    dyn_obj <- aggte(cs_g9_nyt, type = "dynamic", na.rm = TRUE)
+    
+    dyn_frame <- tidy(dyn_obj) %>%
+      mutate(
+        overall.att = dyn_obj$overall.att,
+        overall.se = dyn_obj$overall.se,
+        overall.conf.low = overall.att - qnorm(0.975) * overall.se,
+        overall.conf.high = overall.att + qnorm(0.975) * overall.se,
+        overall.change = overall.att / unique(preevent$avgdyn),
+        group = ifelse(event.time < 0, "Pre-NHI", "Post-NHI"))
+    
+    dyn_frame <- dyn_frame %>%
+      mutate(
+        avgunit = unique(preevent$avgunit),
+        avgdyn = unique(preevent$avgdyn),
+        change = estimate / avgdyn,
+        outcome = outname[i],
+        pretrendtype = "fixed",
+        pgroup = case_when(
+          g == "overall" ~ "Overall",
+          g == "poor" ~ "High-poverty",
+          g == "rich" ~ "Low-poverty"),
+        method = "CS DiD")
+    
+    cs_dyn_list[[length(cs_dyn_list) + 1]] <- dyn_frame
+  }}
+
+cs_dyn_frame <- bind_rows(cs_dyn_list)
+warnings()
+
+write_xlsx(cs_dyn_frame, "./output/q_disl/did_poverty_CS_nocov.xlsx")
+
+# ------------------------------------------------------------------------------
+# Sun and Abraham (2020)
+# ------------------------------------------------------------------------------
+
+# Set the last treated group as the never-treated group
+data_pov <- data %>%
+  subset(., province != "01 Vientiane Capital") %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3) %>%
+  mutate(event = ifelse(group == max(group), -100, event)) %>%  # Last group as control
+  mutate(group = ifelse(group == max(group), 0, group)) %>%
+  mutate(group_d = ifelse(group == max(group), 0, 1))  # Ever-treated 1, Never-treated 0
+
+# Count unique districts by poverty median
+pov_count <- data_pov %>% 
+  dplyr::select(pov_med, district) %>%
+  unique() %>%
+  group_by(pov_med) %>%
+  summarise(count = n_distinct(district)) %>%
+  print()
+
+# Initialize lists
+overall_list <- list()
+overall_att_list <- list()
+poor_list <- list() # poverty level above median
+poor_att_list <- list()
+rich_list <- list() # poverty level below median
+rich_att_list <- list()
+saiw_list <- list()
+
+outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+
+# Loop through each outcome
+for (i in 1:length(outname)) {
+  outn <- rlang::sym(outname[i])
+  
+  preevent <- data_pov %>%
+    filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+    mutate(avgunit = mean(!!outn, na.rm = TRUE)) %>%  # simple average of units
+    group_by(group) %>%  # grouping to reflect group-time ATT
+    mutate(avggrp = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average of units by group
+    dplyr::select(c("group", "avgunit", "avggrp")) %>%
+    mutate(avgdyn = mean(avggrp)) %>%  # averaging of averages # same weighted avg output
+    unique
+  
+  prevent_all <- preevent %>% 
+    pull(avgdyn) %>%
+    unique()
+  
+  preevent_pov <- data_pov %>%
+    filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+    group_by(pov_med) %>%  # grouping to reflect group-time ATT
+    mutate(avgpov = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average by pov_med
+    dplyr::select(c("group", "avgpov", "pov_med")) %>% #"avgunit", 
+    unique
+  
+  prevent_pov1 <- preevent_pov %>% 
+    filter(pov_med == 1) %>% # 1 = above median (poor)
+    pull(avgpov) %>%
+    unique()
+  
+  prevent_pov0 <- preevent_pov %>% 
+    filter(pov_med == 0) %>% # 0 = below median (rich)
+    pull(avgpov) %>%
+    unique()
+  
+  # Overall group analysis
+  overall_att <- data_pov %>% 
+    do(broom::tidy(summary(
+      feols(!!outn ~ facnum + semp + urba + litr + imps +
+              sunab(group, time) | dnum + time, cluster = ~pnum, data = .), 
+      agg = "att"))) %>%
+    filter(!term %in% c("facnum")) %>%
+    mutate(outcome = outname[i],
+           pgroup = "overall",
+           avgpov = prevent_all,
+           overall.change = estimate / avgpov)
+  
+  overall <- data_pov %>% 
+    do(broom::tidy(
+      feols(!!outn ~ facnum + semp + urba + litr + imps +
+              sunab(group, time) | dnum + time, cluster = ~pnum, data = .))) %>%
+    filter(!term %in% c("facnum")) %>%
+    mutate(event.time = as.double(str_replace(term, "time::", "")),
+           conf.low = estimate - (qnorm(0.975) * std.error),
+           conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+    dplyr::select(event.time, estimate, std.error, 
+                  conf.low, conf.high, p.value) %>%
+    bind_rows(tibble(event.time = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    mutate(outcome = outname[i], pgroup = "overall")
+  
+  # Above-median (poor) group analysis
+  poor_att <- data_pov %>% 
+    do(broom::tidy(summary(
+      feols(!!outn ~ facnum + semp + urba + litr + imps + 
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 1), cluster = ~pnum), agg = "att"))) %>%
+    filter(!term %in% c("facnum")) %>%
+    mutate(outcome = outname[i], 
+           pgroup = c("above median (poor)"),
+           avgpov = prevent_pov1,
+           overall.change = estimate / avgpov)
+  
+  poor <- data_pov %>% 
+    do(broom::tidy(
+      feols(!!outn ~ facnum + semp + urba + litr + imps + 
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 1), cluster = ~pnum))) %>%
+    filter(!term %in% c("facnum")) %>%
+    mutate(event.time = as.double(str_replace(term, "time::", "")),
+           conf.low = estimate - (qnorm(0.975) * std.error),
+           conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+    dplyr::select(event.time, estimate, std.error, 
+                  conf.low, conf.high, p.value) %>%
+    bind_rows(tibble(event.time = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    arrange(event.time) %>%
+    mutate(outcome = outname[i], pgroup = c("above median (poor)"))
+  
+  # Below-median (rich) group analysis
+  rich_att <- data_pov %>% 
+    do(broom::tidy(summary(
+      feols(!!outn ~ facnum + semp + urba + litr + imps +
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 0), cluster = ~pnum), agg="att"))) %>%
+    filter(!term %in% c("facnum")) %>%
+    mutate(outcome = outname[i], 
+           pgroup = c("below median (rich)"),
+           avgpov = prevent_pov0,
+           overall.change = estimate / avgpov)
+  
+  rich <- data_pov %>% 
+    do(broom::tidy(
+      feols(!!outn ~ facnum + semp + urba + litr + imps +
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 0), cluster = ~pnum))) %>%
+    filter(!term %in% c("facnum")) %>%
+    mutate(event.time = as.double(str_replace(term, "time::", "")),
+           conf.low = estimate - (qnorm(0.975) * std.error),
+           conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+    dplyr::select(event.time, estimate, std.error, 
+                  conf.low, conf.high, p.value) %>%
+    bind_rows(tibble(event.time = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    arrange(event.time) %>%
+    mutate(outcome = outname[i], pgroup = c("below median (rich)"))
+  
+  overall_list[[i]] <- overall
+  poor_list[[i]] <- poor
+  rich_list[[i]] <- rich
+  
+  overall_att_list[[i]] <- overall_att
+  poor_att_list[[i]] <- poor_att
+  rich_att_list[[i]] <- rich_att
+}
+
+saiw_list <- bind_rows(unlist(list(
+  overall_list, poor_list, rich_list),
+  recursive = FALSE))
+saiw_att_list <- bind_rows(unlist(
+  list(overall_att_list, poor_att_list, rich_att_list),
+  recursive = FALSE))
+
+saiw_att_list <- saiw_att_list %>%
+  dplyr::select(-statistic) %>%
+  mutate(overall.conf.low = estimate - (qnorm(0.975) * std.error),
+         overall.conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+  rename( # new <- old
+    "overall.att" = "estimate", 
+    "overall.se" = "std.error",
+    "overall.p.value" = "p.value",
+    "overall.change" = "overall.change",
+    "baseline" = "avgpov")
+
+saiw_tidy_frame <- left_join(saiw_list, saiw_att_list, 
+                             by=c("outcome", "pgroup")) %>%
+  mutate(pgroup = factor(pgroup, 
+                         levels = c("overall",
+                                    "above median (poor)", 
+                                    "below median (rich)"), 
+                         labels = c("Overall",
+                                    "High-poverty", 
+                                    "Low-poverty")))
+
+write_xlsx(saiw_tidy_frame, "./output/q_disl/did_poverty_AS.xlsx")
+
+# ------------------------------------------------------------------------------
+# Sun and Abraham (2020) - time-interaction
+# ------------------------------------------------------------------------------
+
+# Set the last treated group as the never-treated group
+data_pov <- data %>%
+  subset(., province != "01 Vientiane Capital") %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3) %>%
+  mutate(event = ifelse(group == max(group), -100, event)) %>%  # Last group as control
+  mutate(group = ifelse(group == max(group), 0, group)) %>%
+  mutate(group_d = ifelse(group == max(group), 0, 1))  # Ever-treated 1, Never-treated 0
+
+# Count unique districts by poverty median
+pov_count <- data_pov %>% 
+  dplyr::select(pov_med, district) %>%
+  unique() %>%
+  group_by(pov_med) %>%
+  summarise(count = n_distinct(district)) %>%
+  print()
+
+# Initialize lists
+overall_list <- list()
+overall_att_list <- list()
+poor_list <- list() # poverty level above median
+poor_att_list <- list()
+rich_list <- list() # poverty level below median
+rich_att_list <- list()
+saiw_list <- list()
+
+outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+
+# Loop through each outcome
+for (i in 1:length(outname)) {
+  outn <- rlang::sym(outname[i])
+  
+  preevent <- data_pov %>%
+    filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+    mutate(avgunit = mean(!!outn, na.rm = TRUE)) %>%  # simple average of units
+    group_by(group) %>%  # grouping to reflect group-time ATT
+    mutate(avggrp = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average of units by group
+    dplyr::select(c("group", "avgunit", "avggrp")) %>%
+    mutate(avgdyn = mean(avggrp)) %>%  # averaging of averages # same weighted avg output
+    unique
+  
+  prevent_all <- preevent %>% 
+    pull(avgdyn) %>%
+    unique()
+  
+  preevent_pov <- data_pov %>%
+    filter(group > 0 & event == -1) %>%  # only treated units, event time -1, (excl. G0, G9)
+    group_by(pov_med) %>%  # grouping to reflect group-time ATT
+    mutate(avgpov = mean(!!outn, na.rm = TRUE)) %>% ungroup() %>%  # average by pov_med
+    dplyr::select(c("group", "avgpov", "pov_med")) %>% #"avgunit", 
+    unique
+  
+  prevent_pov1 <- preevent_pov %>% 
+    filter(pov_med == 1) %>% # 1 = above median (poor)
+    pull(avgpov) %>%
+    unique()
+  
+  prevent_pov0 <- preevent_pov %>% 
+    filter(pov_med == 0) %>% # 0 = below median (rich)
+    pull(avgpov) %>%
+    unique()
+  
+  # Overall group analysis
+  overall_att <- data_pov %>% 
+    do(broom::tidy(summary(
+      feols(!!outn ~ i(time, facnum) + i(time, semp) + i(time, urba) + i(time, litr) + 
+              i(time, imps) +
+              sunab(group, time) | dnum + time, cluster = ~pnum, data = .), 
+      agg = "att"))) %>%
+    filter(term %in% c("ATT")) %>%
+    mutate(outcome = outname[i],
+           pgroup = "overall",
+           avgpov = prevent_all,
+           overall.change = estimate / avgpov)
+  
+  overall <- data_pov %>% 
+    do(broom::tidy(
+      feols(!!outn ~ i(time, facnum) + i(time, semp) + i(time, urba) + i(time, litr) + 
+              i(time, imps) +
+              sunab(group, time) | dnum + time, cluster = ~pnum, data = .))) %>%
+    filter(str_detect(term, "^time::[^:]+$")) %>%
+    mutate(event.time = as.double(str_replace(term, "time::", "")),
+           conf.low = estimate - (qnorm(0.975) * std.error),
+           conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+    dplyr::select(event.time, estimate, std.error, 
+                  conf.low, conf.high, p.value) %>%
+    bind_rows(tibble(event.time = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    mutate(outcome = outname[i], pgroup = "overall")
+  
+  # Above-median (poor) group analysis
+  poor_att <- data_pov %>% 
+    do(broom::tidy(summary(
+      feols(!!outn ~ i(time, facnum) + i(time, semp) + i(time, urba) + i(time, litr) + 
+              i(time, imps) +
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 1), cluster = ~pnum), agg = "att"))) %>%
+    filter(term %in% c("ATT")) %>%
+    mutate(outcome = outname[i], 
+           pgroup = c("above median (poor)"),
+           avgpov = prevent_pov1,
+           overall.change = estimate / avgpov)
+  
+  poor <- data_pov %>% 
+    do(broom::tidy(
+      feols(!!outn ~ i(time, facnum) + i(time, semp) + i(time, urba) + i(time, litr) + 
+              i(time, imps) +
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 1), cluster = ~pnum))) %>%
+    filter(str_detect(term, "^time::[^:]+$")) %>%
+    mutate(event.time = as.double(str_replace(term, "time::", "")),
+           conf.low = estimate - (qnorm(0.975) * std.error),
+           conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+    dplyr::select(event.time, estimate, std.error, 
+                  conf.low, conf.high, p.value) %>%
+    bind_rows(tibble(event.time = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    arrange(event.time) %>%
+    mutate(outcome = outname[i], pgroup = c("above median (poor)"))
+  
+  # Below-median (rich) group analysis
+  rich_att <- data_pov %>% 
+    do(broom::tidy(summary(
+      feols(!!outn ~ i(time, facnum) + i(time, semp) + i(time, urba) + i(time, litr) + 
+              i(time, imps) +
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 0), cluster = ~pnum), agg="att"))) %>%
+    filter(term %in% c("ATT")) %>%
+    mutate(outcome = outname[i], 
+           pgroup = c("below median (rich)"),
+           avgpov = prevent_pov0,
+           overall.change = estimate / avgpov)
+  
+  rich <- data_pov %>% 
+    do(broom::tidy(
+      feols(!!outn ~ i(time, facnum) + i(time, semp) + i(time, urba) + i(time, litr) + 
+              i(time, imps) +
+              sunab(group, time) | dnum + time, 
+            data = subset(., pov_med == 0), cluster = ~pnum))) %>%
+    filter(str_detect(term, "^time::[^:]+$")) %>%
+    mutate(event.time = as.double(str_replace(term, "time::", "")),
+           conf.low = estimate - (qnorm(0.975) * std.error),
+           conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+    dplyr::select(event.time, estimate, std.error, 
+                  conf.low, conf.high, p.value) %>%
+    bind_rows(tibble(event.time = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    arrange(event.time) %>%
+    mutate(outcome = outname[i], pgroup = c("below median (rich)"))
+  
+  overall_list[[i]] <- overall
+  poor_list[[i]] <- poor
+  rich_list[[i]] <- rich
+  
+  overall_att_list[[i]] <- overall_att
+  poor_att_list[[i]] <- poor_att
+  rich_att_list[[i]] <- rich_att
+}
+
+saiw_list <- bind_rows(unlist(
+  list(overall_list, poor_list, rich_list),
+  recursive = FALSE))
+saiw_att_list <- bind_rows(unlist(
+  list(overall_att_list, poor_att_list, rich_att_list), 
+  recursive = FALSE))
+
+saiw_att_list <- saiw_att_list %>%
+  dplyr::select(-statistic) %>%
+  mutate(overall.conf.low = estimate - (qnorm(0.975) * std.error),
+         overall.conf.high = estimate + (qnorm(0.975) * std.error)) %>%
+  rename( # new <- old
+    "overall.att" = "estimate", 
+    "overall.se" = "std.error",
+    "overall.p.value" = "p.value",
+    "overall.change" = "overall.change",
+    "baseline" = "avgpov")
+
+saiw_tidy_frame <- left_join(saiw_list, saiw_att_list, 
+                             by=c("outcome", "pgroup")) %>%
+  mutate(pgroup = factor(pgroup, 
+                         levels = c("overall",
+                                    "above median (poor)", 
+                                    "below median (rich)"), 
+                         labels = c("Overall",
+                                    "High-poverty", 
+                                    "Low-poverty")))
+
+write_xlsx(saiw_tidy_frame, "./output/q_disl/did_poverty_AS_time-interaction.xlsx")
+
+```
+
+# A6. Robustness check: DiD heterogeneity-robust estimators
+<br>
+```{r hetero}
+
+# Code is borrowed from
+# https://github.com/fhollenbach/did_compare/blob/main/ComparingDiD.md
+# https://yiqingxu.org/packages/fect/
+# https://asjadnaqvi.github.io/DiD/
+
+# G9 as never-treated unit
+# Control: not yet treated + last treated
+# Assumption: conditional parallel trends
+# facnum_fixed: time-invariant facnum (at event time = -1 for post-NHI, e-1 for pre-NHI) 
+
+data_alt <- data %>%
+  filter(quarter >= 2015.4 & quarter <= 2017.3,
+        province != "01 Vientiane Capital") %>%
+  mutate(group = ifelse(group == max(group), 0, group)) %>%
+  mutate(event2 = ifelse(group == 0, -1000, event)) %>%
+  mutate(group2 = ifelse(group == 0, 0, 1)) # group dummy: 0, 1
+head(data_alt)
+
+outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+
+# ------------------------------------------------------------------------------
+# Dynamic two-way fixed-effects (TWFE) DiD
+# ------------------------------------------------------------------------------
+# install.packages("fixest")
+# library(fixest)
+# https://cran.r-project.org/web/packages/fixest/vignettes/fixest_walkthrough.html#42_Interactions_that_don%E2%80%99t_involve_fixed-effects
+
+# Dynamic two-way fixed effects (homogeneous treatment assumption)
+# ref = c(-1, -1000) means excluding the period just before the treatment (event == -1) 
+# and the never treated (event == -100)
+
+twfe_list <- list()
+
+for (i in 1:length(outname)) {
+ outn <- rlang::sym(outname[i])
+
+ twfe_dyn <- data_alt %>%
+  do(tidy(
+    feols(!!outn ~ facnum_fixed + semp + urba + litr + imps +
+            i(event2, ref = c(-1, -1000)) | dnum + time,
+          data = ., cluster = ~pnum), conf.int = TRUE)) %>%
+  filter(grepl("event2::", term)) %>%
+  mutate(t = as.double(str_replace_all(term, c("event2::" = "")))) %>%
+  dplyr::select(t, estimate, std.error, conf.low, conf.high) %>%
+   # add in data for year -1
+  bind_rows(tibble(t = -1, estimate = 0, std.error = 0,
+                   conf.low = 0, conf.high = 0)) %>%
+  arrange(t) %>%
+  mutate(outcome = outname[i]) %>%
+  mutate(method = "TWFE")
+
+ twfe_list[[i]] <- twfe_dyn
+}
+
+twfe_frame <- bind_rows(twfe_list) %>% 
+  print(n = Inf)
+
+# ------------------------------------------------------------------------------
+# Group-Time DiD (Callaway and Sant’Anna 2021)
+# ------------------------------------------------------------------------------
+# Not yet treated + Last treated
+
+cs_list <- list()
+covariate <- ~facnum_fixed + semp + urba + litr + imps # identical to using 'facnum'
+
+for (i in 1:length(outname)) {
+ set.seed(55555)
+
+ cs_g9_nyt <- att_gt(
+   yname = outname[i], tname = "time", idname = "dnum",
+   gname = "group", control_group = "notyettreated",
+   base_period = "universal",  # reference point fixed pre-NHI period
+   est_method = "dr", clustervars = "pnum",
+   xformla = covariate, panel = TRUE, bstrap = TRUE, cband = TRUE,
+   data = data_alt)
+ warnings()
+
+ cs_dyn <- aggte(cs_g9_nyt, type = "dynamic", na.rm = TRUE) %>%
+  tidy() %>%
+  rename(t = event.time) %>%
+  dplyr::select(t, estimate, std.error, conf.low, conf.high) %>%
+  mutate(outcome = outname[i]) %>%
+  mutate(method = "CS DiD")
+
+ cs_list[[i]] <- cs_dyn
+}
+
+cs_frame <- bind_rows(cs_list)
+
+# ------------------------------------------------------------------------------
+# Stacked DiD (Wing, Freedman and Hollingsworth 2024)
+# ------------------------------------------------------------------------------
+# paper: https://www.nber.org/papers/w32054
+# https://github.com/hollina/stacked-did-weights/tree/main
+
+data.stk <- data_alt %>%
+  mutate(
+    group_na = ifelse(group == 0, NA, group),
+    treat_org = treat)
+
+# --- Sub-experiment 4 ---
+subexp4 <- data.stk %>%
+  filter(!group_na %in% c(5, 6)) %>%
+  mutate(
+    sub_exp = 4,
+    treat = group_na == 4,
+    event_time = time - sub_exp,
+    post = event_time >= 0)
+
+# --- Sub-experiment 5 ---
+subexp5 <- data.stk %>%
+  filter(!group_na %in% c(4, 6)) %>%
+  mutate(
+    sub_exp = 5,
+    treat = group_na == 5,
+    event_time = time - sub_exp,
+    post = event_time >= 0)
+
+# --- Sub-experiment 6 ---
+subexp6 <- data.stk %>%
+  filter(!group_na %in% c(4, 5, 8)) %>%
+  mutate(
+    sub_exp = 6,
+    treat = group_na == 6,
+    event_time = time - sub_exp,
+    post = event_time >= 0)
+
+# Combine all sub-experiments
+data.stk2 <- bind_rows(subexp4, subexp5, subexp6) %>%
+  mutate(treat = ifelse(is.na(treat), 0, treat))
+
+# Keep only the event_time within [-3, 2]
+data.stk2 <- data.stk2 %>%
+  filter(event_time >= -3, event_time <= 2)
+
+# datasummary(All(data.stk2) ~ N + Mean + SD + Min + Max,
+#            data = data.stk2,
+#            output = 'markdown')
+
+# Create compute_weights() function
+compute_weights <- function(dataset, treatedVar, eventTimeVar, subexpVar) {
+  
+  # Step 0: Copy the underlying dataset
+  stack_dt_temp <- dataset
+  
+  # Step 1: Compute stack-level counts (overall by event time)
+  stack_dt_temp <- stack_dt_temp %>%
+    group_by(across(all_of(eventTimeVar))) %>%
+    mutate(stack_n = n(),
+           stack_treat_n = sum(.data[[treatedVar]]),
+           stack_control_n = sum(1 - .data[[treatedVar]])) %>%
+    ungroup()
+  
+  # Step 2: Compute sub-experiment-level counts (by subexp and event time)
+  stack_dt_temp <- stack_dt_temp %>%
+    group_by(across(all_of(c(subexpVar, eventTimeVar)))) %>%
+    mutate(sub_n = n(),
+           sub_treat_n = sum(.data[[treatedVar]]),
+           sub_control_n = sum(1 - .data[[treatedVar]])) %>%
+    ungroup()
+  
+  # Step 3: Compute sub-experiment share of totals
+  stack_dt_temp <- stack_dt_temp %>%
+    mutate(sub_share = sub_n / stack_n,
+           sub_treat_share = sub_treat_n / stack_treat_n,
+           sub_control_share = sub_control_n / stack_control_n)
+  
+  # Step 4: Compute weights for treated and control groups
+  stack_dt_temp <- stack_dt_temp %>%
+    mutate(
+      stack_weight = case_when(
+        .data[[treatedVar]] == 1 ~ 1,
+        .data[[treatedVar]] == 0 ~ sub_treat_share / sub_control_share,
+        TRUE ~ NA))
+  
+  return(stack_dt_temp)
+}
+
+# Compute the stacked weights
+data.stk2 = compute_weights(
+      dataset = data.stk2,
+      treatedVar = "treat",
+      eventTimeVar = "event_time",
+      subexpVar = "sub_exp")
+
+# Summarize
+data.stk2 %>%
+  filter(event_time == 0, treat == 0) %>%
+  group_by(sub_exp) %>%
+  summarise(avg_control_weight = mean(stack_weight, na.rm = TRUE)) %>%
+  arrange(sub_exp)
+
+# Estimate the stacked regression
+# Fit the event study model, using the weights, clustering at the province level.
+stacked_list <- list()
+
+for (i in 1:length(outname)) {
+  outn <- rlang::sym(outname[i])
+  
+  stacked_dyn <- data.stk2 %>% do(broom::tidy(
+    feols(!!outn ~ facnum_fixed + semp + urba + litr + imps + 
+            i(event_time, treat, ref = -1) | treat + event_time,
+          cluster = ~pnum, weights = ~stack_weight, data =.), conf.int = TRUE)) %>%
+    filter(grepl("event_time::", term)) %>%
+    mutate(t = as.double(str_replace_all(term, c("event_time::" = "", 
+                                                 ":treat" = "")))) %>%
+    dplyr::select(t, estimate, std.error, conf.low, conf.high) %>%
+    bind_rows(tibble(t = -1, estimate = 0, std.error = 0, 
+                     conf.low = 0, conf.high = 0)) %>%
+    arrange(t) %>%
+    mutate(outcome = outname[i]) %>%
+    mutate(method = "Stacked DiD")
+  
+  stacked_list[[i]] <- stacked_dyn
+}
+
+stacked_frame <- bind_rows(stacked_list) %>% 
+  print(n = Inf)
+
+# ------------------------------------------------------------------------------
+# Two-stage DiD (Gardner 2021)
+# ------------------------------------------------------------------------------
+# paper: https://www.bu.edu/econ/files/2024/07/two-stage-differences-in-differences.pdf
+# https://journal.r-project.org/articles/RJ-2022-048/
+# https://github.com/kylebutts/did2s
+# have to explicitly indicate both ref(-1, -1000), otherwise, wrong estimates.
+
+impt_gdn_list <- list()
+
+for (i in 1:length(outname)) {
+  impt_gdn_dyn <- data_alt %>% do(broom::tidy(
+    did2s(yname = outname[i],
+          first_stage = ~ facnum_fixed + semp + urba + litr + imps | dnum + time,
+          second_stage = ~ i(event2, ref = c(-1, -1000)), treatment = "treat",
+          data = ., cluster_var = "pnum"), conf.int = TRUE)) %>%
+    filter(grepl("event2::", term)) %>%
+    mutate(t = as.double(str_replace(term, "event2::", ""))) %>%
+    dplyr::select(t, estimate, std.error, conf.low, conf.high) %>%
+    bind_rows(tibble(t = -1, estimate = 0, std.error = 0,
+                     conf.low = 0, conf.high = 0)) %>%
+    arrange(t) %>%
+    mutate(outcome = outname[i]) %>%
+    mutate(method = "Two-stage DiD")
+  
+  impt_gdn_list[[i]] <- impt_gdn_dyn
+}
+
+impt_gdn_frame <- bind_rows(impt_gdn_list) %>% 
+  print(n = Inf)
+
+# ------------------------------------------------------------------------------
+# Extended two-way fixed effects DiD (Wooldridge 2022)
+# ------------------------------------------------------------------------------
+# paper: https://doi.org/10.1093/ectj/utad016
+# instruction: https://cran.r-project.org/web/packages/etwfe/vignettes/etwfe.html
+# https://grantmcdermott.com/etwfe/
+# https://github.com/grantmcdermott/etwfe
+
+etwfe_list <- list()
+
+# Loop through output names and apply transformation
+for (i in seq_along(outname)) {
+  etwfe_list[[i]] <- data_alt %>%
+      dplyr::select(all_of(outname[i]), 
+                    facnum_fixed, semp, urba, litr, imps, time, group, pnum, dnum) %>%
+    rename(wgroup = group) %>%
+    etwfe(
+      fml = as.formula(paste(outname[i], 
+                             "~ facnum_fixed + semp + urba + litr + imps")),
+      tvar = time,
+      gvar = wgroup,
+      ivar = dnum,
+      vcov = ~pnum,
+      data = .)
+}
+
+etwfe_dyn_list <- list()
+for (i in 1:length(etwfe_list)) {
+  etwfe_dyn <- etwfe_list[[i]] %>%
+    emfx(., type = "event", post_only = FALSE) %>%
+    tidy() %>%
+    dplyr::select(t = event, estimate, std.error, conf.low, conf.high) %>%
+    mutate(outcome = outname[i]) %>%
+    mutate(method = "Extended TWFE")
+  
+  etwfe_dyn_list[[i]] <- etwfe_dyn
+}
+
+etwfe_frame <- bind_rows(etwfe_dyn_list) %>% 
+  print(n = Inf)
+
+# ------------------------------------------------------------------------------
+# Tidy and append
+# ------------------------------------------------------------------------------
+
+didalt <- bind_rows(etwfe_frame, stacked_frame, impt_gdn_frame,
+                    cs_frame, twfe_frame) %>%
+  rename(event.time = t) %>%
+  mutate(method = factor(method,
+                         levels = c("TWFE", "CS DiD", "Stacked DiD", 
+                                    "Two-stage DiD", "Extended TWFE"),
+                         labels = c("TWFE DiD",
+                                    "Group-Time DiD (Callaway & Sant'Anna 2021)",
+                                    "Stacked DiD (Wing 2024)",
+                                    "Two-stage DiD (Gardner 2021)",
+                                    "Extended TWFE DiD (Wooldridge 2021)")))
+
+write_xlsx(didalt, "./output/fig_a_06_did_hetero.xlsx")
+
+```
+
+# A9. Robustness check: Controlled interrupted time series analysis (quarterly)
+<br>
+```{r cits}
+
+# Random effects by province
+
+data.its <- data
+drop.list <- c("0101 Chanthabouli", "0102 Sikhottabong", 
+               "0103 Xaisettha", "0109 Pakngum")
+data.its <- filter(data.its, !(district %in% drop.list)) # drop bad controls
+
+p_by_g_q <- data.its %>%
+  group_by(group) %>%
+  dplyr::select(group, province) %>%
+  unique() %>%
+  arrange(group) %>%
+  group_by(group) %>%
+  summarize(province = toString(province))
+p_by_g_q
+
+p_by_g_n <- data.its %>%
+  group_by(group) %>%
+  dplyr::select(group, province, district) %>%
+  unique() %>%
+  arrange(group) %>%
+  group_by(group) %>%
+  summarize(dnum = n_distinct(district))
+p_by_g_n
+
+# Seasonal dummy
+qtr <- as.yearqtr(as.character(data.its$quarter), format = "%Y.%q")
+data.its$quarter_fac <- factor(format(qtr, "%q"),
+                               levels = 1:4,
+                               labels = c("Q1","Q2","Q3","Q4"))
+unique(data.its$quarter_fac)
+
+# intv: dummy for control (0) / treatment (1)
+# post: dummy for pre (0) / post (1)
+# event: time
+
+# Estimation equation
+# intercept             b0: control group intercept
+# event                 b1: time trend
+# post                  b2: control group level change, if any
+# post x event          b3: control group slope change, if any
+# intv                  b4: treatment (intercept difference, pre-NHI period)
+# intv x event          b5: pre-NHI slope change (parallel trends)
+#                           if not statistically sig. -> trend not different
+# intv x post           b6: post-NHI level change differences
+# intv x event x post   b7: post-NHI slope change differences
+
+# Quarterly, q4/2015 - q1/2019
+# - Group 0: 01 VTP
+# - Group 4: 17 ATP, 03 LNT, 18 XSB
+# - Group 5: 14 SRV
+# - Group 6: 11 BKX, 07 HPN, 09 XKG, 04 ODX, 02 PSL
+# - Group 8: 13 SVK, 16 CPS
+# - Group 9: 05 BKO, 12 KMN, 06 LPG, 08 XYB, 10 VTP
+
+# ------------------------------------------------------------------------------
+# ITS Model 1-1
+# Data frequency: Quarterly
+# Treatment: Early-treated districts (group 4, 5, 6)
+# Control: Last-treated districts (group 9)
+# Period: 3 quarters before/after (q4/2015 - q3/2017)
+# ------------------------------------------------------------------------------
+
+# Intervention group is group 4, 5, 6
+pnumlist <- unique(data.its$pnum)  # run model for each province
+pnumlist <- pnumlist[pnumlist != 1 & !(pnumlist %in% c(5, 6, 8, 10, 12, 13, 16))]
+# drop group 0 (VTC), group 8 (13, 16), group 9 (5, 6, 8, 10, 12)
+
+its_m1q <- list()
+
+for (j in pnumlist) {
+  data.its.q <- data.its %>%  # treatment: 2, 3, 4, 7, 9, 11, 14, 17, 18
+    filter(pnum == j | pnum %in% c(5, 6, 8, 10, 12)) %>%  # controls: 5, 6, 8, 10, 12
+    mutate(gmin = min(group),
+           event = time - gmin,
+           post = as.integer(event >= 0),
+           post_event = post * event,
+           gmax = max(group),
+           intv = as.integer(group != gmax),  # zero if group 9
+           intv_event = intv * event,
+           intv_post = intv * post,
+           intv_event_post = intv * event * post) %>%
+    filter(event >= -3 & event <= 2)  # -3~-1 is pre-NHI, 0~2 is post-NHI
+  
+  min(data.its.q$event)
+  max(data.its.q$event)
+  
+  outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+  its_df <- list()
+  
+  for (i in 1:length(outname)) {
+    set.seed(55555)
+    
+    # District random effects
+    x1 <- c("event", "post", "post_event", "intv",
+            "intv_event", "intv_post", "intv_event_post",
+            "facnum")
+    formula1 <- reformulate(c(x1), response = outname[i])
+    its_q <- plm(formula1, data = data.its.q,
+                 index = c("dnum"), model = "random")
+    
+    summary(its_q)
+    its_fit <- lmtest::coeftest(its_q, vcovHC(its_q, method = "arellano", type = "HC3"))
+    its_fit <- its_fit %>% tidy(conf.int = TRUE)
+    its_fit$outcome <- outname[i]
+    its_df[[i]] <- its_fit
+  }
+  
+  its_set <- bind_rows(its_df)
+  its_set$pnum <- j
+  its_m1q[[j]] <- its_set
+}
+
+its_m1q_all <- bind_rows(its_m1q)
+
+# ------------------------------------------------------------------------------
+# ITS Model 2-1
+# Data frequency: Quarterly
+# Treatment: All treated districts (group 4, 5, 6, 8, 9)
+# Control: Untreated districts (group 0 VTC)
+# Period: 3 quarters before/after (q4/2015 - q2/2018)
+# ------------------------------------------------------------------------------
+
+# Intervention group (group 4, 5, 6, 8, 9)
+pnumlist <- unique(data.its$pnum)
+pnumlist <- pnumlist[pnumlist != 1] # drop group 0 (VTC)
+
+# Control group (untreated districts from group 0 VTC)
+# 104 Sisattanak
+# 105 Naxaythong
+# 106 Xaithani
+# 107 Hatxayfong
+# 108 Sangthong
+# 109 Pakngum
+
+# Outpatient o5: Sisattanak, Naxaythong, Xaithani, Hatxayfong
+# Outpatient u5: Xaithani, Sangthong, Pakngum
+# Inpatient o5: Sisattanak, Sangthong
+# Inpatient u5: Xaithani, Sangthong // drop
+# Inpatient day: Sangthong, Pakngum
+# Delivery: Xaithani, Sangthong, Pakngum
+
+list_untreated <- list(
+  c(104, 105, 106, 107),
+  c(106, 108, 109),
+  c(104, 108),
+  c(106, 108),
+  c(107, 108),
+  c(106, 108, 109))
+
+its_m2q <- list()
+
+for (j in pnumlist) {
+  
+  outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+  its_df <- list()
+  
+  for (i in 1:length(outname)) {
+    set.seed(55555)
+    
+    data.its.q <- data.its %>%
+      filter(pnum == j | dnum %in% list_untreated[[i]]) %>%  # controls: select dnum
+      mutate(
+        gnum = first(group[pnum == j]),
+        event = time - gnum,
+        post = as.integer(event >= 0),
+        post_event = post * event,
+        intv = as.integer(pnum != 1),  # zero if VTC
+        intv_event = intv * event,
+        intv_post = intv * post,
+        intv_event_post = intv * event * post) %>%
+      filter(event >= -3 & event <= 2)  # -3~-1 is pre-NHI, 0~2 is post-NHI
+    
+    min(data.its.q$event)
+    max(data.its.q$event)
+    
+    # District random effect
+    x1 <- c("event", "post", "post_event", "intv",
+            "intv_event", "intv_post", "intv_event_post",
+            "facnum")
+    formula1 <- reformulate(c(x1), response = outname[i])
+    its_q <- plm(formula1, data = data.its.q,
+                 index = c("dnum"), model = "random")
+    summary(its_q)
+    
+    its_fit <- lmtest::coeftest(its_q, vcovHC(its_q, method = "arellano", 
+                                              type = "HC3"))
+    its_fit <- its_fit %>% tidy(conf.int = TRUE)
+    its_fit$outcome <- outname[i]
+    its_df[[i]] <- its_fit
+  }
+  
+  its_set <- bind_rows(its_df)
+  its_set$pnum <- j
+  its_m2q[[j]] <- its_set
+}
+
+its_m2q_all <- bind_rows(its_m2q)
+
+# ------------------------------------------------------------------------------
+# ITS Model 3-1
+# Data frequency: Quarterly
+# Treatment: Early-treated districts (group 4, 5, 6)
+# Control: Untreated districts (group 0 VTC)
+# Period: 3 quarters before/after (q4/2015 - q3/2017)
+# ------------------------------------------------------------------------------
+
+# Intervention group (group 4, 5, 6 only)
+pnumlist <- unique(data.its$pnum)
+pnumlist <- pnumlist[pnumlist != 1 & !(pnumlist %in% c(5, 6, 8, 10, 12, 13, 16))]
+# drop group 0 (VTC) and group 8 (13, 16) and group 9 (5, 6, 8, 10, 12)
+
+# Control group (untreated districts from group 0 VTC)
+# 104 Sisattanak
+# 105 Naxaythong
+# 106 Xaithani
+# 107 Hatxayfong
+# 108 Sangthong
+# 109 Pakngum
+
+# Outpatient o5: Sisattanak, Naxaythong, Xaithani, Hatxayfong
+# Outpatient u5: Xaithani, Sangthong, Pakngum
+# Inpatient o5: Sisattanak, Sangthong
+# Inpatient u5: Xaithani, Sangthong // drop
+# Inpatient day: Sangthong, Pakngum
+# Delivery: Xaithani, Sangthong, Pakngum
+
+list_untreated <- list(
+  c(104, 105, 106, 107),
+  c(106, 108, 109),
+  c(104, 108),
+  c(106, 108),
+  c(107, 108),
+  c(106, 108, 109))
+
+its_m3q <- list()
+
+for (j in pnumlist) {
+  
+  outname <- c("opo5r", "ipo5r", "opu5r", "ipu5r", "iplos", "delr")
+  its_df <- list()
+  
+  for (i in 1:length(outname)) {
+    set.seed(55555)
+    
+    data.its.q <- data.its %>%
+      filter(pnum == j | dnum %in% list_untreated[[i]]) %>% # controls: select dnum
+      mutate(
+        gnum = first(group[pnum == j]),
+        event = time - gnum,
+        post = as.integer(event >= 0),
+        post_event = post * event,
+        intv = as.integer(pnum != 1), # zero if VTC
+        intv_event = intv * event,
+        intv_post = intv * post,
+        intv_event_post = intv * event * post) %>%
+      filter(event >= -3 & event <= 2) # -3~-1 is pre-NHI, 0~2 is post-NHI
+    
+    min(data.its.q$event)
+    max(data.its.q$event)
+    
+    # District random effect
+    x1 <- c("event", "post", "post_event", "intv",
+            "intv_event", "intv_post", "intv_event_post",
+            "facnum")
+    formula1 <- reformulate(c(x1), response = outname[i])
+    its_q <- plm(formula1, data = data.its.q, index = c("dnum"), model = "random")
+    summary(its_q)
+    its_fit <- lmtest::coeftest(its_q, vcovHC(its_q, method = "arellano", type = "HC3"))
+    its_fit <- its_fit %>% tidy(conf.int = TRUE)
+    its_fit$outcome <- outname[i]
+    its_df[[i]] <- its_fit
+  }
+  
+  its_set <- bind_rows(its_df)
+  its_set$pnum <- j
+  its_m3q[[j]] <- its_set
+}
+
+its_m3q_all <- bind_rows(its_m3q)
+
+# Combine all frames
+its_all <- list()
+its_all[[1]] <- its_m1q_all
+its_all[[2]] <- its_m2q_all
+its_all[[3]] <- its_m3q_all
+
+# ------------------------------------------------------------------------------
+# Meta-Analysis
+# ------------------------------------------------------------------------------
+
+meta_summary <- list()
+meta_summary_df <- list()
+meta_listname <- c("model_1_q", "model_2_q", "model_3_q")
+
+for (j in 1:length(its_all)) {
+  for (i in 1:length(outname)) {
+    set.seed(55555)
+    
+    its_meta_sub <- its_all[[j]] %>% filter(outcome == outname[i])
+    its_meta_b5 <- its_meta_sub %>% filter(term == "intv_event")
+    its_meta_b6 <- its_meta_sub %>% filter(term == "intv_post")
+    its_meta_b7 <- its_meta_sub %>% filter(term == "intv_event_post")
+    
+    its_b5 <- metagen(TE = estimate,
+                      seTE = std.error,
+                      studlab = pnum,
+                      data = its_meta_b5,
+                      random = TRUE,
+                      method.tau = "REML",
+                      method.random.ci = "HK")
+    summary(its_b5)
+    
+    b5_summary <- cbind.data.frame(its_b5$TE.random,
+                                   its_b5$lower.random,
+                                   its_b5$upper.random,
+                                   its_b5$statistic.random,
+                                   its_b5$pval.random,
+                                   "Parallel trend (beta5)")
+    colnames(b5_summary) <- c("estimate", "conf.low", "conf.high", "statistic", 
+                              "p.value", "label")
+    
+    its_b6 <- metagen(TE = estimate,
+                      seTE = std.error,
+                      studlab = pnum,
+                      data = its_meta_b6,
+                      random = TRUE,
+                      method.tau = "REML",
+                      method.random.ci = "HK")
+    summary(its_b6)
+    
+    b6_summary <- cbind.data.frame(its_b6$TE.random,
+                                   its_b6$lower.random,
+                                   its_b6$upper.random,
+                                   its_b6$statistic.random,
+                                   its_b6$pval.random,
+                                   "DiD in level (beta6)")
+    colnames(b6_summary) <- c("estimate", "conf.low", "conf.high", "statistic", 
+                              "p.value", "label")
+    
+    its_b7 <- metagen(TE = estimate,
+                      seTE = std.error,
+                      studlab = pnum,
+                      data = its_meta_b7,
+                      random = TRUE,
+                      method.tau = "REML",
+                      method.random.ci = "HK")
+    summary(its_b7)
+    
+    b7_summary <- cbind.data.frame(its_b7$TE.random,
+                                   its_b7$lower.random,
+                                   its_b7$upper.random,
+                                   its_b7$statistic.random,
+                                   its_b7$pval.random,
+                                   "DiD in slope (beta7)")
+    colnames(b7_summary) <- c("estimate", "conf.low", "conf.high", "statistic", 
+                              "p.value", "label")
+    
+    combined <- rbind(b5_summary, b6_summary, b7_summary)
+    combined$outcome <- outname[i]
+    meta_summary[[i]] <- combined
+  }
+  
+  meta_temp <- bind_rows(meta_summary)
+  meta_temp$dataset <- meta_listname[j]
+  meta_summary_df[[j]] <- meta_temp
+}
+
+its_meta_final_q <- bind_rows(meta_summary_df) 
+# %>%
+#   mutate(label = factor(label, 
+#                         levels = c("DiD in slope (beta7)", 
+#                                    "DiD in level (beta6)", 
+#                                    "Parallel trend (beta5)")),
+#          model = factor(dataset, 
+#                            levels = c("model_3_q", "model_2_q", "model_1_q"),
+#                            labels = c("Never treated 456, quarterly", 
+#                                       "Never treated, quarterly", 
+#                                       "Last treated, quarterly")))
+
+write_xlsx(its_meta_final_q, "./output/q_disl/cits_q.xlsx")
+
+```
+
+# Log close
+<br>
+```{r log_close}
+
+# Log close
+log_close(footer = TRUE)
+writeLines(readLines(logrecord))
+
+```
+<br>
