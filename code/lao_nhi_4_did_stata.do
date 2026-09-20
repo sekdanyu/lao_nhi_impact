@@ -6,7 +6,6 @@
 
 clear all
 global dir "/enter-directory-here/"
-global dir "/Users/sdyu/Library/CloudStorage/Dropbox/1_Study/3. PhD/1. McMaster/5. Thesis/1 NHI Impact DiD/Analysis_v5_Github_final_R4.6.1/"
 cd "$dir"
 version 19
 
