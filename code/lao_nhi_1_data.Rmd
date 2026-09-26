@@ -24,6 +24,7 @@ setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 getwd()
 
 # Install and load packages
+# R version 4.6.1 (2026-06-24)
 source("lao_nhi_0_package.r", echo = TRUE)
 
 # Create directories
