@@ -24,4 +24,4 @@ jobs:
             graph
             output
             README.md
-          PUBLISH: 'false'
+          PUBLISH: 'true'
